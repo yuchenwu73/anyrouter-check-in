@@ -1,0 +1,22 @@
+[
+  {
+    "name": "邮箱密码登录（推荐，不会过期）",
+    "provider": "anyrouter",
+    "email": "your@email.com",
+    "password": "your_password"
+  },
+  {
+    "name": "session 登录（适合 OAuth 注册、没有设过密码的账号）",
+    "provider": "anyrouter",
+    "cookies": {
+      "session": "浏览器 F12 → Application → Cookies 里 session 的值"
+    },
+    "api_user": "12345"
+  },
+  {
+    "name": "agentrouter 账号",
+    "provider": "agentrouter",
+    "email": "your@email.com",
+    "password": "your_password"
+  }
+]

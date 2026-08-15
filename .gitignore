@@ -11,5 +11,7 @@ htmlcov
 balance_hash.txt
 .browser_profiles
 checkin_screenshots
+config/accounts.json
+config/oneline.txt
 
 .DS_Store
