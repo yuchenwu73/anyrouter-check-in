@@ -15,6 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     env:
+      TZ: Asia/Shanghai
       PYTHONIOENCODING: utf-8
       PYTHONUNBUFFERED: 1
       DEBUG_MODE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.debug == 'true' && 'true' || 'false' }}
