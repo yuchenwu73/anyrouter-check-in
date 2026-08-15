@@ -503,15 +503,13 @@ async def main():
 
 	print(f'[INFO] Found {len(accounts)} account configurations')
 
-	last_balance_hash = load_balance_hash()
-
 	success_count = 0
 	total_count = len(accounts)
 	notification_content = []
 	current_balances = {}
 	account_check_in_details = {}
 	need_notify = False
-	balance_changed = False
+	should_report_details = False
 
 	for i, account in enumerate(accounts):
 		account_key = f'account_{i + 1}'
@@ -575,19 +573,16 @@ async def main():
 			notification_content.append(f'[FAIL] {account_name} exception: {str(e)[:50]}...')
 
 	current_balance_hash = generate_balance_hash(current_balances) if current_balances else None
-	if current_balance_hash:
-		if last_balance_hash is None:
-			balance_changed = True
-			need_notify = True
-			print('[NOTIFY] First run detected, will send notification with current balances')
-		elif current_balance_hash != last_balance_hash:
-			balance_changed = True
-			need_notify = True
-			print('[NOTIFY] Balance changes detected, will send notification')
-		else:
-			print('[INFO] No balance changes detected')
 
-	if balance_changed:
+	# 只有真正签到拿到额度才通知；平时用掉额度导致的余额下降不算
+	if any(detail['check_in_reward'] > 0.01 for detail in account_check_in_details.values()):
+		should_report_details = True
+		need_notify = True
+		print('[NOTIFY] Check-in reward detected, will send notification')
+	else:
+		print('[INFO] No check-in reward detected, balance notification skipped')
+
+	if should_report_details:
 		for i, account in enumerate(accounts):
 			account_key = f'account_{i + 1}'
 			if account_key in account_check_in_details:
