@@ -1,6 +1,6 @@
 # 账号配置模板
 
-用来生成 GitHub Secret `ANYROUTER_ACCOUNTS` 的值。
+用来生成 GitHub Secret `CHECKIN_ACCOUNTS` 的值。
 
 ## 用法
 
@@ -10,7 +10,7 @@ vim config/accounts.json        # 填入自己的账号
 ./config/build.sh               # 校验 + 压成单行 + 复制到剪贴板
 ```
 
-然后把输出粘贴到仓库 Settings → Secrets and variables → Actions → `ANYROUTER_ACCOUNTS`。
+然后把输出粘贴到仓库 Settings → Secrets and variables → Actions → `CHECKIN_ACCOUNTS`。
 
 `build.sh` 会先校验 JSON 语法和字段完整性，格式错了会直接指出问题，避免推上去才发现配置是坏的。
 

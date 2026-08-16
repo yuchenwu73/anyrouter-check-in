@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把 config/accounts.json 压成单行 JSON，用于粘贴到 GitHub Secret: ANYROUTER_ACCOUNTS
+# 把 config/accounts.json 压成单行 JSON，用于粘贴到 GitHub Secret: CHECKIN_ACCOUNTS
 #
 # 用法：
 #   cp config/accounts.example.json config/accounts.json
@@ -68,9 +68,9 @@ SLUG=$(git -C "$DIR" remote get-url origin 2>/dev/null |
 echo
 if [ -n "${SLUG:-}" ]; then
     echo "粘贴到这里（直达编辑页）："
-    echo "  https://github.com/$SLUG/settings/secrets/actions/ANYROUTER_ACCOUNTS"
+    echo "  https://github.com/$SLUG/settings/secrets/actions/CHECKIN_ACCOUNTS"
 else
-    echo "粘贴到：仓库 Settings → Secrets and variables → Actions → ANYROUTER_ACCOUNTS"
+    echo "粘贴到：仓库 Settings → Secrets and variables → Actions → CHECKIN_ACCOUNTS"
 fi
 echo
 echo "步骤：清空 Value 输入框 → 粘贴 → Update secret"
