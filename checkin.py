@@ -50,6 +50,9 @@ CHECK_IN_BODY_LOG_LIMIT = int(os.getenv('CHECKIN_BODY_LOG_LIMIT', '300'))
 # 额度入账可能滞后于签到请求，签到后按此配置轮询复读余额
 CHECK_IN_SETTLE_ATTEMPTS = int(os.getenv('CHECKIN_SETTLE_ATTEMPTS', '3'))
 CHECK_IN_SETTLE_DELAY_S = float(os.getenv('CHECKIN_SETTLE_DELAY_S', '3'))
+# agentrouter 对同 IP 连续请求会限流（返回 WAF 页而非 JSON），冷却后重试
+AUTO_CHECKIN_RETRY_ATTEMPTS = int(os.getenv('CHECKIN_AUTO_RETRY_ATTEMPTS', '3'))
+AUTO_CHECKIN_RETRY_DELAY_S = float(os.getenv('CHECKIN_AUTO_RETRY_DELAY_S', '20'))
 
 
 def load_balance_hash():
@@ -595,6 +598,15 @@ def run_check_in_requests(
 				return success, user_info_before, user_info_after
 
 			user_info_after = get_user_info(client, headers, user_info_url)
+			attempt = 1
+			while not (user_info_after and user_info_after.get('success')) and attempt < AUTO_CHECKIN_RETRY_ATTEMPTS:
+				attempt += 1
+				print(
+					f'[RETRY] {account_name}: user info blocked (rate limit?), '
+					f'cooling down {AUTO_CHECKIN_RETRY_DELAY_S:.0f}s before attempt {attempt}/{AUTO_CHECKIN_RETRY_ATTEMPTS}'
+				)
+				time.sleep(AUTO_CHECKIN_RETRY_DELAY_S)
+				user_info_after = get_user_info(client, headers, user_info_url)
 			if user_info_after and user_info_after.get('success'):
 				print(f'[INFO] {account_name}: Check-in completed automatically (triggered by user info request)')
 				return True, user_info_before, user_info_after
