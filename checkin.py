@@ -106,9 +106,9 @@ def load_daily_state() -> dict:
 				else:
 					# 跨天只清零当日奖励，余额基线要留着，否则认不出间隙里到账的额度
 					state['accounts'] = {
-						name: {'last_total': rec['last_total']}
+						name: {'max_total': rec['max_total']}
 						for name, rec in saved['accounts'].items()
-						if isinstance(rec, dict) and 'last_total' in rec
+						if isinstance(rec, dict) and 'max_total' in rec
 					}
 					print(f'[STATE] New day {state["date"]} (was {saved.get("date")}), daily rewards reset')
 	except Exception as e:
@@ -133,9 +133,32 @@ def record_daily_reward(state: dict, account_name: str, reward: float) -> dict:
 	return record
 
 
-def update_balance_baseline(state: dict, account_name: str, total: float) -> None:
-	"""记下本次运行结束时的总额，供下次运行识别间隙里到账的额度"""
-	state['accounts'].setdefault(account_name, {})['last_total'] = round(total, 2)
+def observe_balance(state: dict, account_name: str, totals: list[float]) -> float:
+	"""对比余额基线，返回本次新观测到的到账额度，同时抬高基线
+
+	基线取「观测到的最大总额」而不是上次运行的读数。总额（余额 + 累计消耗）只会
+	因为到账而上升，但账号正在用的时候接口可能先扣余额、后记消耗，中间态会让总额
+	短暂偏低；拿上次读数当基线，就会把这个恢复过程误判成一笔到账。
+	"""
+	observed = max(totals)
+	record: dict = state['accounts'].setdefault(account_name, {})
+	baseline = record.get('max_total')
+
+	if baseline is None:
+		record['max_total'] = round(observed, 2)
+		return 0.0
+
+	# 所有读数都明显低于基线，说明额度真被下调过，基线跟着降，否则以后再也认不出到账
+	if observed < baseline - 1:
+		print(f'[STATE] {account_name}: baseline lowered ${baseline:.2f} -> ${observed:.2f}')
+		record['max_total'] = round(observed, 2)
+		return 0.0
+
+	credited = observed - baseline
+	if credited > 0.01:
+		record['max_total'] = round(observed, 2)
+		return credited
+	return 0.0
 
 
 def parse_cookies(cookies_data):
@@ -333,7 +356,8 @@ def get_user_info_after_check_in(client, headers, user_info_url: str, account_na
 	"""签到后读取用户信息
 
 	额度入账可能滞后于签到请求，立即复读会拿到旧值并被误判成「无奖励」。
-	这里轮询到总额变化为止，全程不变也照常返回最后一次读数。
+	这里轮询到总额上升为止；只等上升不等下降，因为账号在用的时候接口会先扣余额、
+	后记消耗，总额的短暂回落不是签到结果。全程没涨也照常返回最后一次读数。
 	"""
 	user_info = None
 	for attempt in range(1, CHECK_IN_SETTLE_ATTEMPTS + 1):
@@ -346,13 +370,13 @@ def get_user_info_after_check_in(client, headers, user_info_url: str, account_na
 			print(f'[SETTLE] {account_name}: attempt {attempt}/{CHECK_IN_SETTLE_ATTEMPTS} user info unavailable')
 			continue
 
-		if before_total is None or abs(after_total - before_total) > 0.01:
+		if before_total is None or after_total - before_total > 0.01:
 			print(f'[SETTLE] {account_name}: settled on attempt {attempt} (total ${after_total:.2f})')
 			return user_info
 
 		print(
 			f'[SETTLE] {account_name}: attempt {attempt}/{CHECK_IN_SETTLE_ATTEMPTS} '
-			f'unchanged (total ${after_total:.2f})'
+			f'no rise yet (total ${after_total:.2f})'
 		)
 
 	return user_info
@@ -671,21 +695,14 @@ async def main():
 					}
 
 					display_name = account.get_display_name(i)
-					baseline = daily_state['accounts'].get(display_name, {}).get('last_total')
 
-					# 间隙到账：额度在上次运行之后、本次读到「签到前」余额之前就进来了
-					if baseline is not None and total_before - baseline > 0.01:
-						carry_over = total_before - baseline
-						record_daily_reward(daily_state, display_name, carry_over)
-						credited_this_run[display_name] = credited_this_run.get(display_name, 0.0) + carry_over
-						print(f'[STATE] {display_name}: +${carry_over:.2f} credited between runs')
-
-					if check_in_reward > 0.01:
-						record_daily_reward(daily_state, display_name, check_in_reward)
-						credited_this_run[display_name] = credited_this_run.get(display_name, 0.0) + check_in_reward
-						print(f'[STATE] {display_name}: +${check_in_reward:.2f} credited during this run')
-
-					update_balance_baseline(daily_state, display_name, total_after)
+					# 到账既可能发生在本次运行内，也可能在上次运行之后（登录动作就会触发签到），
+					# 两种都表现为总额高过基线，所以拿本次两次读数一起跟基线比
+					credited = observe_balance(daily_state, display_name, [total_before, total_after])
+					if credited > 0.01:
+						record_daily_reward(daily_state, display_name, credited)
+						credited_this_run[display_name] = credited_this_run.get(display_name, 0.0) + credited
+						print(f'[STATE] {display_name}: +${credited:.2f} credited today')
 
 			if should_notify_this_account:
 				account_name = account.get_display_name(i)

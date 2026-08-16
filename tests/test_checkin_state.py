@@ -10,9 +10,9 @@ from checkin import (
 	format_check_in_notification,
 	generate_balance_hash,
 	load_daily_state,
+	observe_balance,
 	record_daily_reward,
 	save_daily_state,
-	update_balance_baseline,
 )
 
 
@@ -75,32 +75,57 @@ def test_daily_state_resets_on_a_new_day(tmp_path, monkeypatch):
 	monkeypatch.setattr(checkin, 'CHECK_IN_STATE_FILE', str(state_file))
 	stale = {
 		'date': '2000-01-01',
-		'accounts': {'zjwei@aust.edu.cn': {'reward': 25.0, 'at': '02:21:31', 'last_total': 3645.75}},
+		'accounts': {'zjwei@aust.edu.cn': {'reward': 25.0, 'at': '02:21:31', 'max_total': 3645.75}},
 	}
 	state_file.write_text(json.dumps(stale), encoding='utf-8')
 
 	accounts = load_daily_state()['accounts']
 
 	# 当日奖励清零，但余额基线要留着，否则认不出间隙里到账的额度
-	assert accounts['zjwei@aust.edu.cn'] == {'last_total': 3645.75}
+	assert accounts['zjwei@aust.edu.cn'] == {'max_total': 3645.75}
 
 
-def test_balance_baseline_detects_credit_landing_between_runs(tmp_path, monkeypatch):
-	state_file = tmp_path / 'checkin_state.json'
-	monkeypatch.setattr(checkin, 'CHECK_IN_STATE_FILE', str(state_file))
+def test_first_observation_only_seeds_the_baseline():
+	state = {'date': '2026-08-16', 'accounts': {}}
 
-	# 02:20 那次跑完，总额 3645.75
-	state = load_daily_state()
-	update_balance_baseline(state, 'zjwei@aust.edu.cn', 3645.75)
-	save_daily_state(state)
+	assert observe_balance(state, 'zjwei@aust.edu.cn', [3645.75, 3645.75]) == 0.0
+	assert state['accounts']['zjwei@aust.edu.cn']['max_total'] == 3645.75
 
-	# 08:59 再跑，「签到前」读到的总额已经多了 $25——本次运行内看不到任何变化
-	state = load_daily_state()
-	baseline = state['accounts']['zjwei@aust.edu.cn']['last_total']
-	assert 3670.75 - baseline == 25.0
 
-	record_daily_reward(state, 'zjwei@aust.edu.cn', 3670.75 - baseline)
-	assert state['accounts']['zjwei@aust.edu.cn']['reward'] == 25.0
+def test_observe_balance_detects_credit_landing_between_runs():
+	# 02:20 跑完基线 3645.75；08:59 再跑时「签到前」就已经多了 $25，本次运行内零变化
+	state = {'date': '2026-08-16', 'accounts': {'zjwei@aust.edu.cn': {'max_total': 3645.75}}}
+
+	assert observe_balance(state, 'zjwei@aust.edu.cn', [3670.75, 3670.75]) == 25.0
+
+
+def test_observe_balance_detects_credit_landing_within_the_run():
+	state = {'date': '2026-08-16', 'accounts': {'L站-小号': {'max_total': 2075.0}}}
+
+	assert observe_balance(state, 'L站-小号', [2075.0, 2100.0]) == 25.0
+
+
+def test_observe_balance_ignores_a_dip_that_recovers():
+	# 账号在用时接口会先扣余额、后记消耗，总额短暂偏低后恢复，不能算成到账
+	state = {'date': '2026-08-16', 'accounts': {'2021303397@aust.edu.cn': {'max_total': 2300.0}}}
+
+	assert observe_balance(state, '2021303397@aust.edu.cn', [2284.89, 2300.0]) == 0.0
+	assert state['accounts']['2021303397@aust.edu.cn']['max_total'] == 2300.0
+
+
+def test_observe_balance_lowers_the_baseline_when_quota_is_really_cut():
+	# 额度真被下调时基线要跟着降，否则以后再也认不出到账
+	state = {'date': '2026-08-16', 'accounts': {'zjwei@aust.edu.cn': {'max_total': 3670.75}}}
+
+	assert observe_balance(state, 'zjwei@aust.edu.cn', [100.0, 100.0]) == 0.0
+	assert state['accounts']['zjwei@aust.edu.cn']['max_total'] == 100.0
+
+
+def test_observe_balance_does_not_credit_twice_for_the_same_rise():
+	state = {'date': '2026-08-16', 'accounts': {'zjwei@aust.edu.cn': {'max_total': 3645.75}}}
+
+	assert observe_balance(state, 'zjwei@aust.edu.cn', [3670.75, 3670.75]) == 25.0
+	assert observe_balance(state, 'zjwei@aust.edu.cn', [3670.75, 3670.75]) == 0.0
 
 
 def test_record_daily_reward_accumulates_and_keeps_first_landing_time():
@@ -144,7 +169,7 @@ def test_notification_flags_accounts_with_no_credit_today():
 
 def test_notification_flags_accounts_carrying_only_a_balance_baseline():
 	# 只有余额基线、今天还没到账的账号，不能被当成已签到
-	message = format_check_in_notification(make_detail(), {'last_total': 3645.75})
+	message = format_check_in_notification(make_detail(), {'max_total': 3645.75})
 
 	assert '今日尚未观测到额度到账' in message
 
