@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 from datetime import datetime
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -41,6 +42,14 @@ from utils.proxy import get_playwright_proxy, get_proxy_server
 load_dotenv()
 
 BALANCE_HASH_FILE = 'balance_hash.txt'
+# 今日到账基线：跨运行记住每个账号今天有没有真的拿到额度
+CHECK_IN_STATE_FILE = 'checkin_state.json'
+
+# 签到接口响应体日志截断长度
+CHECK_IN_BODY_LOG_LIMIT = int(os.getenv('CHECKIN_BODY_LOG_LIMIT', '300'))
+# 额度入账可能滞后于签到请求，签到后按此配置轮询复读余额
+CHECK_IN_SETTLE_ATTEMPTS = int(os.getenv('CHECKIN_SETTLE_ATTEMPTS', '3'))
+CHECK_IN_SETTLE_DELAY_S = float(os.getenv('CHECKIN_SETTLE_DELAY_S', '3'))
 
 
 def load_balance_hash():
@@ -70,6 +79,63 @@ def generate_balance_hash(balances):
 	)
 	balance_json = json.dumps(simple_balances, sort_keys=True, separators=(',', ':'))
 	return hashlib.sha256(balance_json.encode('utf-8')).hexdigest()[:16]
+
+
+def today_key() -> str:
+	"""今日日期，CI 里由 TZ=Asia/Shanghai 决定"""
+	return datetime.now().strftime('%Y-%m-%d')
+
+
+def load_daily_state() -> dict:
+	"""加载今日到账基线，跨天自动重置
+
+	单次运行的余额 delta 说明不了「今天签没签上」：额度可能是更早那次运行拿到的，
+	也可能是在两次运行的间隙里到账的（邮箱密码登录会先跑一遍浏览器登录，
+	等脚本读「签到前」余额时钱已经进来了）。所以这里既存当日奖励，也存余额基线。
+	"""
+	state: dict = {'date': today_key(), 'accounts': {}}
+	try:
+		if os.path.exists(CHECK_IN_STATE_FILE):
+			with open(CHECK_IN_STATE_FILE, 'r', encoding='utf-8') as f:
+				saved = json.load(f)
+			if isinstance(saved, dict) and isinstance(saved.get('accounts'), dict):
+				if saved.get('date') == state['date']:
+					state['accounts'] = saved['accounts']
+					credited = sum(1 for r in state['accounts'].values() if r.get('reward', 0) > 0.01)
+					print(f'[STATE] Daily baseline loaded: {credited} account(s) credited today')
+				else:
+					# 跨天只清零当日奖励，余额基线要留着，否则认不出间隙里到账的额度
+					state['accounts'] = {
+						name: {'last_total': rec['last_total']}
+						for name, rec in saved['accounts'].items()
+						if isinstance(rec, dict) and 'last_total' in rec
+					}
+					print(f'[STATE] New day {state["date"]} (was {saved.get("date")}), daily rewards reset')
+	except Exception as e:
+		print(f'[WARN] Failed to load daily state: {e}')
+	return state
+
+
+def save_daily_state(state: dict) -> None:
+	"""保存今日到账基线"""
+	try:
+		with open(CHECK_IN_STATE_FILE, 'w', encoding='utf-8') as f:
+			json.dump(state, f, ensure_ascii=False, sort_keys=True)
+	except Exception as e:
+		print(f'[WARN] Failed to save daily state: {e}')
+
+
+def record_daily_reward(state: dict, account_name: str, reward: float) -> dict:
+	"""把到账额度累加进今日基线，观测时间保留最早一次"""
+	record: dict = state['accounts'].setdefault(account_name, {})
+	record['reward'] = round(record.get('reward', 0.0) + reward, 2)
+	record['at'] = record.get('at') or datetime.now().strftime('%H:%M:%S')
+	return record
+
+
+def update_balance_baseline(state: dict, account_name: str, total: float) -> None:
+	"""记下本次运行结束时的总额，供下次运行识别间隙里到账的额度"""
+	state['accounts'].setdefault(account_name, {})['last_total'] = round(total, 2)
 
 
 def parse_cookies(cookies_data):
@@ -256,6 +322,42 @@ def get_user_info(client, headers, user_info_url: str):
 		return {'success': False, 'error': f'Failed to get user info: {str(e)[:50]}...'}
 
 
+def quota_total(user_info) -> float | None:
+	"""签到前后对比用的总额（余额 + 累计消耗），读不到返回 None"""
+	if user_info and user_info.get('success'):
+		return float(user_info['quota']) + float(user_info['used_quota'])
+	return None
+
+
+def get_user_info_after_check_in(client, headers, user_info_url: str, account_name: str, before_total):
+	"""签到后读取用户信息
+
+	额度入账可能滞后于签到请求，立即复读会拿到旧值并被误判成「无奖励」。
+	这里轮询到总额变化为止，全程不变也照常返回最后一次读数。
+	"""
+	user_info = None
+	for attempt in range(1, CHECK_IN_SETTLE_ATTEMPTS + 1):
+		if CHECK_IN_SETTLE_DELAY_S > 0:
+			time.sleep(CHECK_IN_SETTLE_DELAY_S)
+		user_info = get_user_info(client, headers, user_info_url)
+		after_total = quota_total(user_info)
+
+		if after_total is None:
+			print(f'[SETTLE] {account_name}: attempt {attempt}/{CHECK_IN_SETTLE_ATTEMPTS} user info unavailable')
+			continue
+
+		if before_total is None or abs(after_total - before_total) > 0.01:
+			print(f'[SETTLE] {account_name}: settled on attempt {attempt} (total ${after_total:.2f})')
+			return user_info
+
+		print(
+			f'[SETTLE] {account_name}: attempt {attempt}/{CHECK_IN_SETTLE_ATTEMPTS} '
+			f'unchanged (total ${after_total:.2f})'
+		)
+
+	return user_info
+
+
 async def prepare_cookies(account_name: str, provider_config, user_cookies: dict) -> dict | None:
 	"""准备请求所需的 cookies（可能包含 WAF cookies）"""
 	waf_cookies = {}
@@ -288,6 +390,9 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 	response = client.post(sign_in_url, headers=checkin_headers, timeout=30)
 
 	print(f'[RESPONSE] {account_name}: Response status code {response.status_code}')
+	# 诊断用：接口对「首次签到」和「今天已签过」可能返回同样的成功码，只有 body 能区分
+	body_preview = ' '.join(response.text.split())[:CHECK_IN_BODY_LOG_LIMIT]
+	print(f'[RESPONSE-BODY] {account_name}: {body_preview}')
 
 	if response.status_code == 200:
 		try:
@@ -315,7 +420,7 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 		return False
 
 
-def format_check_in_notification(detail: dict) -> str:
+def format_check_in_notification(detail: dict, today_record: dict | None = None) -> str:
 	"""格式化签到通知消息"""
 	lines = [
 		f'[CHECK-IN] {detail["name"]}',
@@ -326,26 +431,29 @@ def format_check_in_notification(detail: dict) -> str:
 		f'     余额: ${detail["after_quota"]:.2f}  |  累计消耗: ${detail["after_used"]:.2f}',
 	]
 
-	has_reward = detail['check_in_reward'] != 0
+	# 阈值和 main() 里记账用的一致：余额取整到分，跨读数会有 ±0.01 抖动
+	has_reward = detail['check_in_reward'] > 0.01
 	has_usage = detail['usage_increase'] != 0
 
-	if has_reward or has_usage:
-		lines.append('  ━━━━━━━━━━━━━━━━━━━━')
+	lines.append('  ━━━━━━━━━━━━━━━━━━━━')
 
-		if not has_reward and has_usage:
-			lines.append('  今日已签到（期间有使用）')
-
-		if has_reward:
-			lines.append(f'  签到获得: +${detail["check_in_reward"]:.2f}')
-
-		if has_usage:
-			lines.append(f'  期间消耗: ${detail["usage_increase"]:.2f}')
-
-		if detail['balance_change'] != 0:
-			change_symbol = '+' if detail['balance_change'] > 0 else ''
-			lines.append(f'  余额变化: {change_symbol}${detail["balance_change"]:.2f}')
+	if has_reward:
+		lines.append(f'  签到获得: +${detail["check_in_reward"]:.2f}')
+	elif today_record and today_record.get('reward', 0) > 0.01:
+		# 本次没到账，但今天早些时候已经到账了，别写成像失败的样子
+		landed_at = today_record.get('at')
+		when = f'（{landed_at} 观测到）' if landed_at else ''
+		lines.append(f'  今日额度已到账 +${today_record["reward"]:.2f}{when}，本次运行未再到账')
 	else:
-		lines.extend(['  ━━━━━━━━━━━━━━━━━━━━', '  今日已签到，无变化'])
+		# 今天从没观测到额度到账，这才是需要留意的情况
+		lines.append('  今日尚未观测到额度到账')
+
+	if has_usage:
+		lines.append(f'  期间消耗: ${detail["usage_increase"]:.2f}')
+
+	if detail['balance_change'] != 0:
+		change_symbol = '+' if detail['balance_change'] > 0 else ''
+		lines.append(f'  余额变化: {change_symbol}${detail["balance_change"]:.2f}')
 
 	return '\n'.join(lines)
 
@@ -457,7 +565,9 @@ def run_check_in_requests(
 
 			if provider_config.needs_manual_check_in():
 				success = execute_check_in(client, account_name, provider_config, headers)
-				user_info_after = get_user_info(client, headers, user_info_url)
+				user_info_after = get_user_info_after_check_in(
+					client, headers, user_info_url, account_name, quota_total(user_info_before)
+				)
 				return success, user_info_before, user_info_after
 
 			user_info_after = get_user_info(client, headers, user_info_url)
@@ -502,6 +612,8 @@ async def main():
 		sys.exit(1)
 
 	print(f'[INFO] Found {len(accounts)} account configurations')
+
+	daily_state = load_daily_state()
 
 	success_count = 0
 	total_count = len(accounts)
@@ -556,6 +668,21 @@ async def main():
 						'success': success,
 					}
 
+					display_name = account.get_display_name(i)
+					baseline = daily_state['accounts'].get(display_name, {}).get('last_total')
+
+					# 间隙到账：额度在上次运行之后、本次读到「签到前」余额之前就进来了
+					if baseline is not None and total_before - baseline > 0.01:
+						carry_over = total_before - baseline
+						record_daily_reward(daily_state, display_name, carry_over)
+						print(f'[STATE] {display_name}: +${carry_over:.2f} credited between runs')
+
+					if check_in_reward > 0.01:
+						record_daily_reward(daily_state, display_name, check_in_reward)
+						print(f'[STATE] {display_name}: +${check_in_reward:.2f} credited during this run')
+
+					update_balance_baseline(daily_state, display_name, total_after)
+
 			if should_notify_this_account:
 				account_name = account.get_display_name(i)
 				status = '[SUCCESS]' if success else '[FAIL]'
@@ -588,12 +715,14 @@ async def main():
 			if account_key in account_check_in_details:
 				detail = account_check_in_details[account_key]
 				account_name = detail['name']
-				account_result = format_check_in_notification(detail)
+				account_result = format_check_in_notification(detail, daily_state['accounts'].get(account_name))
 				if not any(account_name in item for item in notification_content):
 					notification_content.append(account_result)
 
 	if current_balance_hash:
 		save_balance_hash(current_balance_hash)
+
+	save_daily_state(daily_state)
 
 	if need_notify and notification_content:
 		summary = [
