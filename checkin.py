@@ -614,6 +614,8 @@ async def main():
 	print(f'[INFO] Found {len(accounts)} account configurations')
 
 	daily_state = load_daily_state()
+	# 本次运行观测到的到账，键为账号名。间隙到账和当场到账都要记进来，通知开关看它
+	credited_this_run: dict = {}
 
 	success_count = 0
 	total_count = len(accounts)
@@ -675,10 +677,12 @@ async def main():
 					if baseline is not None and total_before - baseline > 0.01:
 						carry_over = total_before - baseline
 						record_daily_reward(daily_state, display_name, carry_over)
+						credited_this_run[display_name] = credited_this_run.get(display_name, 0.0) + carry_over
 						print(f'[STATE] {display_name}: +${carry_over:.2f} credited between runs')
 
 					if check_in_reward > 0.01:
 						record_daily_reward(daily_state, display_name, check_in_reward)
+						credited_this_run[display_name] = credited_this_run.get(display_name, 0.0) + check_in_reward
 						print(f'[STATE] {display_name}: +${check_in_reward:.2f} credited during this run')
 
 					update_balance_baseline(daily_state, display_name, total_after)
@@ -701,13 +705,15 @@ async def main():
 
 	current_balance_hash = generate_balance_hash(current_balances) if current_balances else None
 
-	# 只有真正签到拿到额度才通知；平时用掉额度导致的余额下降不算
-	if any(detail['check_in_reward'] > 0.01 for detail in account_check_in_details.values()):
+	# 本次观测到额度到账才通知：可能是签到当场拿到的，也可能是上次运行之后进来的。
+	# 平时用掉额度导致的余额下降不算——总额（余额 + 累计消耗）对消耗是不变的
+	if credited_this_run:
 		should_report_details = True
 		need_notify = True
-		print('[NOTIFY] Check-in reward detected, will send notification')
+		total_credited = sum(credited_this_run.values())
+		print(f'[NOTIFY] ${total_credited:.2f} credited across {len(credited_this_run)} account(s), will notify')
 	else:
-		print('[INFO] No check-in reward detected, balance notification skipped')
+		print('[INFO] No credit observed this run, balance notification skipped')
 
 	if should_report_details:
 		for i, account in enumerate(accounts):
