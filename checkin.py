@@ -278,10 +278,13 @@ async def login_with_credentials(
 	provider_name: str,
 	email: str,
 	password: str,
+	*,
+	use_proxy_override: bool | None = None,
 ) -> BrowserLoginResult | None:
 	"""使用邮箱密码通过浏览器登录，返回 cookies 与拦截到的 api user id。"""
 	print(f'[PROCESSING] {account_name}: Logging in with email/password...')
 
+	use_proxy = provider_config.use_proxy if use_proxy_override is None else use_proxy_override
 	login_url = f'{provider_config.domain}{provider_config.login_path}'
 	settings = load_browser_login_settings(
 		account_name,
@@ -296,13 +299,10 @@ async def login_with_credentials(
 		f'humanize={settings.humanize}, timeout={timeout_ms}ms'
 	)
 
-	print(
-		f'[INFO] {account_name}: Provider proxy={"enabled" if provider_config.use_proxy else "disabled"} '
-		f'({provider_name})'
-	)
+	print(f'[INFO] {account_name}: Provider proxy={"enabled" if use_proxy else "disabled"} ({provider_name})')
 
 	try:
-		context = await launch_login_context(settings, use_proxy=provider_config.use_proxy)
+		context = await launch_login_context(settings, use_proxy=use_proxy)
 	except Exception as e:
 		print(f'[FAILED] {account_name}: Browser launch failed: {e}')
 		return None
@@ -585,22 +585,25 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		use_proxy=provider_config.use_proxy,
 	)
 
-	# WAF 会盯上被复用的浏览器会话（HTTP 403）：清掉 profile 强制全新登录再试一次
+	# WAF 会盯上被复用的浏览器会话（HTTP 403）：清掉 profile 换代理 IP 重新登录再试一次
 	if not result[0] and account.has_login_credentials() and hit_waf_403(result[1], result[2]):
 		assert account.email is not None and account.password is not None
-		print(f'[RETRY] {account_name}: HTTP 403 with cached browser profile, wiping profile and re-logging in')
+		print(f'[RETRY] {account_name}: HTTP 403, wiping browser profile and retrying via proxy')
 		settings = load_browser_login_settings(
 			account_name,
 			account.provider,
 			persist_profile=provider_config.persist_profile,
 		)
 		shutil.rmtree(settings.profile_dir, ignore_errors=True)
+		# 换出口 IP：runner 机房 IP 已被 WAF 标记，走机场节点重新登录
+		rotate_proxy_node(account_name)
 		login_result = await login_with_credentials(
 			account_name,
 			provider_config,
 			account.provider,
 			account.email,
 			account.password,
+			use_proxy_override=True,
 		)
 		if login_result:
 			result = run_check_in_requests(
@@ -609,7 +612,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 				account_name,
 				provider_config,
 				api_user_override=login_result.api_user,
-				use_proxy=provider_config.use_proxy,
+				use_proxy=True,
 			)
 
 	return result
