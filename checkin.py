@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -53,6 +54,46 @@ CHECK_IN_SETTLE_DELAY_S = float(os.getenv('CHECKIN_SETTLE_DELAY_S', '3'))
 # agentrouter 对同 IP 连续请求会限流（返回 WAF 页而非 JSON），冷却后重试
 AUTO_CHECKIN_RETRY_ATTEMPTS = int(os.getenv('CHECKIN_AUTO_RETRY_ATTEMPTS', '3'))
 AUTO_CHECKIN_RETRY_DELAY_S = float(os.getenv('CHECKIN_AUTO_RETRY_DELAY_S', '20'))
+
+# mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
+PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
+_proxy_node_cursor = 0
+
+
+def rotate_proxy_node(account_name: str) -> None:
+	"""通过 Clash API 把 CHECKIN 组切到下一个出口节点，让每个账号用不同 IP（规避同 IP 限流）"""
+	global _proxy_node_cursor
+	if not PROXY_CONTROLLER:
+		return
+	proxy_url = os.getenv('CHECKIN_PROXY_URL', '').strip()
+	try:
+		with httpx.Client(timeout=10) as client:
+			info = client.get(f'{PROXY_CONTROLLER}/proxies/CHECKIN').json()
+			nodes = [n for n in info.get('all', []) if n != 'AUTO']
+			if not nodes:
+				return
+			# 最多探测 5 个节点，坏节点跳过
+			for _ in range(min(len(nodes), 5)):
+				target = nodes[_proxy_node_cursor % len(nodes)]
+				_proxy_node_cursor += 1
+				client.put(f'{PROXY_CONTROLLER}/proxies/CHECKIN', json={'name': target})
+				if not proxy_url:
+					print(f'[PROXY] {account_name}: exit node -> {target} (unverified)')
+					return
+				try:
+					with httpx.Client(proxy=proxy_url, timeout=10) as probe:
+						resp = probe.get('https://www.gstatic.com/generate_204')
+					if resp.status_code in (200, 204):
+						print(f'[PROXY] {account_name}: exit node -> {target}')
+						return
+				except Exception:
+					pass
+				print(f'[PROXY] {account_name}: node "{target}" unreachable, trying next')
+			# 全部探测失败则回退自动选择
+			client.put(f'{PROXY_CONTROLLER}/proxies/CHECKIN', json={'name': 'AUTO'})
+			print(f'[PROXY] {account_name}: all probed nodes failed, fallback to AUTO')
+	except Exception as e:
+		print(f'[WARN] {account_name}: proxy node rotation failed: {str(e)[:80]}')
 
 
 def load_balance_hash():
@@ -497,6 +538,10 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 
 	print(f'[INFO] {account_name}: Using provider "{account.provider}" ({provider_config.domain})')
 
+	# 走代理的账号先轮换出口节点，避免多账号同 IP 连续请求被限流
+	if provider_config.use_proxy:
+		rotate_proxy_node(account_name)
+
 	# 邮箱密码优先
 	all_cookies = None
 	resolved_api_user: str | None = None
@@ -531,7 +576,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 
 	print(f'[AUTH] {account_name}: Using auth method -> {auth_method}')
 
-	return run_check_in_requests(
+	result = run_check_in_requests(
 		all_cookies,
 		account,
 		account_name,
@@ -539,6 +584,43 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		api_user_override=resolved_api_user,
 		use_proxy=provider_config.use_proxy,
 	)
+
+	# WAF 会盯上被复用的浏览器会话（HTTP 403）：清掉 profile 强制全新登录再试一次
+	if not result[0] and account.has_login_credentials() and hit_waf_403(result[1], result[2]):
+		assert account.email is not None and account.password is not None
+		print(f'[RETRY] {account_name}: HTTP 403 with cached browser profile, wiping profile and re-logging in')
+		settings = load_browser_login_settings(
+			account_name,
+			account.provider,
+			persist_profile=provider_config.persist_profile,
+		)
+		shutil.rmtree(settings.profile_dir, ignore_errors=True)
+		login_result = await login_with_credentials(
+			account_name,
+			provider_config,
+			account.provider,
+			account.email,
+			account.password,
+		)
+		if login_result:
+			result = run_check_in_requests(
+				login_result.cookies,
+				account,
+				account_name,
+				provider_config,
+				api_user_override=login_result.api_user,
+				use_proxy=provider_config.use_proxy,
+			)
+
+	return result
+
+
+def hit_waf_403(*infos) -> bool:
+	"""用户信息读取结果里是否出现 HTTP 403（WAF 拦截特征）"""
+	for info in infos:
+		if info and 'HTTP 403' in str(info.get('error', '')):
+			return True
+	return False
 
 
 def run_check_in_requests(

@@ -36,8 +36,11 @@ gunzip -f "${ARCHIVE}"
 chmod +x "mihomo-linux-amd64-${MIHOMO_VERSION}"
 MIHOMO_BIN="${PROXY_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}"
 
+PROXY_CONTROLLER_PORT="${PROXY_CONTROLLER_PORT:-9091}"
+
 cat > config.yaml <<EOF
 mixed-port: ${PROXY_PORT}
+external-controller: 127.0.0.1:${PROXY_CONTROLLER_PORT}
 allow-lan: false
 ipv6: false
 mode: rule
@@ -56,7 +59,14 @@ proxy-providers:
       url: https://www.gstatic.com/generate_204
 
 proxy-groups:
+  # CHECKIN 是 select 组，脚本可通过 Clash API 手动切换出口节点（规避同 IP 限流）
   - name: CHECKIN
+    type: select
+    proxies:
+      - AUTO
+    use:
+      - subscription
+  - name: AUTO
     type: url-test
     url: "${PROXY_TEST_URL}"
     interval: 300
@@ -100,4 +110,5 @@ echo "[SUCCESS] Proxy is ready: ${PROXY_URL}"
 echo "[INFO] Proxy is scoped to CHECKIN_PROXY_URL (browser/python only, not global HTTP_PROXY)"
 if [[ -n "${GITHUB_ENV:-}" ]]; then
 	echo "CHECKIN_PROXY_URL=${PROXY_URL}" >> "${GITHUB_ENV}"
+	echo "CHECKIN_PROXY_CONTROLLER=http://127.0.0.1:${PROXY_CONTROLLER_PORT}" >> "${GITHUB_ENV}"
 fi

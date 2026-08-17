@@ -9,12 +9,13 @@
 
 ## 本 Fork 的改动
 
-Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了六处改动，其余保持一致，上游更新可正常合并：
+Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了七处改动，其余保持一致，上游更新可正常合并：
 
 - **时间显示为北京时间** — workflow 里加了 `TZ: Asia/Shanghai`。上游用的是 runner 默认的 UTC，日志和通知里的时间会差 8 小时
 - **通知只在有意义时发** — 上游的规则是「余额一变就通知」，而账号在使用中余额一直在动，一天能收到 4 封。改成只在**签到真正拿到额度**或**有账号签到失败**时推送，正常一天一封
 - **签到结果判定更可靠** — 上游只看单次运行的余额差，而额度入账可能滞后于签到请求，立刻复读会拿到旧值、把已到账误判成「无变化」。改动三处：签到后轮询复读余额（`CHECKIN_SETTLE_ATTEMPTS` / `CHECKIN_SETTLE_DELAY_S` 可调）；用 `checkin_state.json` 记住每个账号**今天**有没有真的到账，跨运行、跨天自动重置；通知里写明「今日额度已到账 +$25.00（02:21:31 观测到）」，而不是含糊的「今日已签到，无变化」。签到接口的响应体也会打进日志，便于确认平台对「今天已签过」到底返回什么
-- **AgentRouter 限流重试** — agentrouter 对同一 IP 的连续请求会限流（返回 WAF 页而非 JSON），多账号时排在后面的会稳定失败。自动签到读取失败时冷却 20 秒重试（`CHECKIN_AUTO_RETRY_ATTEMPTS` / `CHECKIN_AUTO_RETRY_DELAY_S` 可调）
+- **AgentRouter 限流重试与节点轮换** — agentrouter 对同一 IP 的连续请求会限流（返回 WAF 页而非 JSON），多账号时排在后面的会稳定失败。两层应对：配置了 mihomo 代理时，每个走代理的账号自动切换到不同出口节点（通过 Clash API，`CHECKIN_PROXY_CONTROLLER`）；读取失败时仍冷却 20 秒重试（`CHECKIN_AUTO_RETRY_ATTEMPTS` / `CHECKIN_AUTO_RETRY_DELAY_S` 可调）
+- **WAF 403 自动重登** — 阿里云 WAF 偶尔会盯上被复用的浏览器会话（跨 runner IP 复用 profile 时报 HTTP 403）。邮箱密码账号遇到 403 会自动清掉缓存 profile、全新登录后重试一次
 - **账号密钥改名** — 本 fork 的 workflow 从 Secret `CHECKIN_ACCOUNTS` 读账号列表（因为里面不只有 AnyRouter，还有 AgentRouter 账号）。下文上游文档里写的 `ANYROUTER_ACCOUNTS` 在本 fork 不生效，配置格式不变
 - **账号配置模板** — 新增 `config/` 目录，`./config/build.sh` 一条命令完成格式校验、压成单行、复制到剪贴板，不用手工压缩 JSON，漏个逗号也能当场发现（见 [config/README.md](config/README.md)）
 
