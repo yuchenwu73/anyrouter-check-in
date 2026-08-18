@@ -153,6 +153,16 @@ def test_notification_uses_today_baseline_when_this_run_had_no_change():
 	assert '尚未观测到' not in message
 
 
+def test_notification_credits_login_time_landing_to_this_run():
+	# 邮箱密码账号：额度在浏览器登录时就发放，读「签到前」余额时已进账，签到前后差值为 0
+	record = {'reward': 25.0, 'at': '08:57:24'}
+
+	message = format_check_in_notification(make_detail(), record, credited_this_run=True)
+
+	assert '签到获得: +$25.00（08:57:24 观测到），登录时已到账' in message
+	assert '本次运行未再到账' not in message
+
+
 def test_notification_does_not_claim_no_change_while_showing_usage():
 	# settle 等待期间正好在消耗额度，措辞不能一边说无变化一边列出消耗
 	message = format_check_in_notification(make_detail(usage=12.55), {'reward': 25.0, 'at': '02:21:31'})

@@ -488,7 +488,7 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 		return False
 
 
-def format_check_in_notification(detail: dict, today_record: dict | None = None) -> str:
+def format_check_in_notification(detail: dict, today_record: dict | None = None, credited_this_run: bool = False) -> str:
 	"""格式化签到通知消息"""
 	lines = [
 		f'[CHECK-IN] {detail["name"]}',
@@ -508,10 +508,14 @@ def format_check_in_notification(detail: dict, today_record: dict | None = None)
 	if has_reward:
 		lines.append(f'  签到获得: +${detail["check_in_reward"]:.2f}')
 	elif today_record and today_record.get('reward', 0) > 0.01:
-		# 本次没到账，但今天早些时候已经到账了，别写成像失败的样子
 		landed_at = today_record.get('at')
 		when = f'（{landed_at} 观测到）' if landed_at else ''
-		lines.append(f'  今日额度已到账 +${today_record["reward"]:.2f}{when}，本次运行未再到账')
+		if credited_this_run:
+			# 邮箱密码账号的额度在浏览器登录时就发放了，读「签到前」余额时已经进账
+			lines.append(f'  签到获得: +${today_record["reward"]:.2f}{when}，登录时已到账')
+		else:
+			# 本次没到账，但今天早些时候已经到账了，别写成像失败的样子
+			lines.append(f'  今日额度已到账 +${today_record["reward"]:.2f}{when}，本次运行未再到账')
 	else:
 		# 今天从没观测到额度到账，这才是需要留意的情况
 		lines.append('  今日尚未观测到额度到账')
@@ -835,7 +839,11 @@ async def main():
 			if account_key in account_check_in_details:
 				detail = account_check_in_details[account_key]
 				account_name = detail['name']
-				account_result = format_check_in_notification(detail, daily_state['accounts'].get(account_name))
+				account_result = format_check_in_notification(
+					detail,
+					daily_state['accounts'].get(account_name),
+					credited_this_run=account_name in credited_this_run,
+				)
 				if not any(account_name in item for item in notification_content):
 					notification_content.append(account_result)
 
