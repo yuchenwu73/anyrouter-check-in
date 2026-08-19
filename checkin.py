@@ -57,6 +57,8 @@ AUTO_CHECKIN_RETRY_DELAY_S = float(os.getenv('CHECKIN_AUTO_RETRY_DELAY_S', '20')
 
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
+# 机场订阅里混着「剩余流量：17 GB」这类信息占位节点，多半连不通，轮换时跳过
+PROXY_INFO_NODE_KEYWORDS = ('剩余流量', '套餐到期', '距离下次重置', '官网', '过期时间')
 _proxy_node_cursor = 0
 
 
@@ -69,7 +71,11 @@ def rotate_proxy_node(account_name: str) -> None:
 	try:
 		with httpx.Client(timeout=10) as client:
 			info = client.get(f'{PROXY_CONTROLLER}/proxies/CHECKIN').json()
-			nodes = [n for n in info.get('all', []) if n != 'AUTO']
+			nodes = [
+				n
+				for n in info.get('all', [])
+				if n != 'AUTO' and not any(kw in n for kw in PROXY_INFO_NODE_KEYWORDS)
+			]
 			if not nodes:
 				return
 			# 最多探测 5 个节点，坏节点跳过

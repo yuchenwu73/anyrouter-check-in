@@ -14,6 +14,8 @@ jobs:
   checkin:
     runs-on: ubuntu-latest
     environment: production
+    # 兜底：整个任务最多跑 40 分钟。默认上限是 6 小时，某个步骤挂死会白烧一次运行且不发通知
+    timeout-minutes: 40
     env:
       TZ: Asia/Shanghai
       PYTHONIOENCODING: utf-8
@@ -45,8 +47,14 @@ jobs:
         echo "✅ 环境初始化完成"
 
     - name: 安装系统依赖
+      timeout-minutes: 8
       run: |
-        sudo apt-get update
+        # apt 源偶尔会挂死（观测到一次拖满 6 小时上限），限时并重试一次
+        for attempt in 1 2; do
+          if timeout 180 sudo apt-get update; then break; fi
+          echo "[WARN] apt-get update 第 ${attempt} 次失败，10 秒后重试"
+          sleep 10
+        done
         sudo apt-get install -y xvfb fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
           fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf
 
