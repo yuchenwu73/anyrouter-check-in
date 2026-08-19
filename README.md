@@ -9,16 +9,17 @@
 
 ## 本 Fork 的改动
 
-Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了八处改动，其余保持一致，上游更新可正常合并：
+Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了九处改动，其余保持一致，上游更新可正常合并：
 
 - **时间显示为北京时间** — workflow 里加了 `TZ: Asia/Shanghai`。上游用的是 runner 默认的 UTC，日志和通知里的时间会差 8 小时
 - **通知只在有意义时发** — 上游的规则是「余额一变就通知」，而账号在使用中余额一直在动，一天能收到 4 封。改成只在**签到真正拿到额度**或**有账号签到失败**时推送，正常一天一封
 - **签到结果判定更可靠** — 上游只看单次运行的余额差，而额度入账可能滞后于签到请求，立刻复读会拿到旧值、把已到账误判成「无变化」。改动三处：签到后轮询复读余额（`CHECKIN_SETTLE_ATTEMPTS` / `CHECKIN_SETTLE_DELAY_S` 可调）；用 `checkin_state.json` 记住每个账号**今天**有没有真的到账，跨运行、跨天自动重置；通知按到账时机分开措辞（详见下条），而不是含糊的「今日已签到，无变化」。签到接口的响应体也会打进日志，便于确认平台对「今天已签过」到底返回什么
 - **通知措辞区分到账时机** — 额度可能由签到接口当场发放，也可能在浏览器登录动作时就已发放（邮箱密码账号即如此，读「签到前」余额时钱已进账，前后差值为 0）。两种都写成 `签到获得: +$25.00`（后者附「（08:57:24 观测到），登录时已到账」），一眼能看出本次运行挣到了钱；只有真正是今天早先运行拿到的才写「今日额度已到账 …，本次运行未再到账」
-- **AgentRouter 限流重试与节点轮换** — agentrouter 对同一 IP 的连续请求会限流（返回 WAF 页而非 JSON），多账号时排在后面的会稳定失败。两层应对：配置了 mihomo 代理时，每个走代理的账号自动切换到不同出口节点（通过 Clash API，`CHECKIN_PROXY_CONTROLLER`）；读取失败时仍冷却 20 秒重试（`CHECKIN_AUTO_RETRY_ATTEMPTS` / `CHECKIN_AUTO_RETRY_DELAY_S` 可调）
+- **AgentRouter 限流重试与节点轮换** — agentrouter 对同一 IP 的连续请求会限流（返回 WAF 页而非 JSON），多账号时排在后面的会稳定失败。两层应对：配置了 mihomo 代理时，每个走代理的账号自动切换到不同出口节点（通过 Clash API，`CHECKIN_PROXY_CONTROLLER`），订阅里「剩余流量：xx GB」这类信息占位节点会跳过；读取失败时仍冷却 20 秒重试（`CHECKIN_AUTO_RETRY_ATTEMPTS` / `CHECKIN_AUTO_RETRY_DELAY_S` 可调）
 - **WAF 403 自动换 IP 重登** — 阿里云 WAF 会按「账号 + 出口 IP」标记，被盯上后即使全新登录也过不去（实测清 profile 重登仍 403）。邮箱密码账号遇到 403 时会清掉缓存 profile、切换机场出口节点、改走代理重新登录并重试一次；平时仍走直连，不影响其它账号
 - **账号密钥改名** — 本 fork 的 workflow 从 Secret `CHECKIN_ACCOUNTS` 读账号列表（因为里面不只有 AnyRouter，还有 AgentRouter 账号）。下文上游文档里写的 `ANYROUTER_ACCOUNTS` 在本 fork 不生效，配置格式不变
 - **账号配置模板** — 新增 `config/` 目录，`./config/build.sh` 一条命令完成格式校验、压成单行、复制到剪贴板，不用手工压缩 JSON，漏个逗号也能当场发现（见 [config/README.md](config/README.md)）
+- **运行超时兜底** — 实测遇到过 `apt-get update` 挂死，把 job 拖满 GitHub 默认的 6 小时上限，这次签到什么都没做也不会发通知。现在 job 限时 40 分钟、装系统依赖限时 8 分钟且 apt 失败自动重试一次，卡住会快速失败而不是白烧一次运行
 
 如果这几处改动对你有用，**欢迎 Star 或 Fork**。
 
