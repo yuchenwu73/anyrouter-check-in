@@ -155,12 +155,15 @@ class AccountConfig:
 	name: str | None = None
 	email: str | None = None
 	password: str | None = None
+	# 覆盖 provider 的 use_proxy：某些账号被 WAF 按「账号 + 出口 IP」拉黑，必须直接走代理
+	use_proxy: bool | None = None
 
 	@classmethod
 	def from_dict(cls, data: dict, index: int) -> 'AccountConfig':
 		"""从字典创建 AccountConfig"""
 		provider = data.get('provider', 'anyrouter')
 		name = data.get('name', f'Account {index + 1}')
+		use_proxy = data.get('use_proxy')
 
 		return cls(
 			cookies=data.get('cookies'),
@@ -169,7 +172,12 @@ class AccountConfig:
 			name=name if name else None,
 			email=data.get('email'),
 			password=data.get('password'),
+			use_proxy=use_proxy if isinstance(use_proxy, bool) else None,
 		)
+
+	def resolve_use_proxy(self, provider_use_proxy: bool) -> bool:
+		"""账号级配置优先，未配置则跟随 provider"""
+		return provider_use_proxy if self.use_proxy is None else self.use_proxy
 
 	def has_login_credentials(self) -> bool:
 		"""是否配置了邮箱密码登录"""

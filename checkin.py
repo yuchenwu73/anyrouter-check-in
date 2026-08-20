@@ -434,9 +434,12 @@ def get_user_info_after_check_in(client, headers, user_info_url: str, account_na
 	return user_info
 
 
-async def prepare_cookies(account_name: str, provider_config, user_cookies: dict) -> dict | None:
+async def prepare_cookies(
+	account_name: str, provider_config, user_cookies: dict, *, use_proxy: bool | None = None
+) -> dict | None:
 	"""准备请求所需的 cookies（可能包含 WAF cookies）"""
 	waf_cookies = {}
+	use_proxy = provider_config.use_proxy if use_proxy is None else use_proxy
 
 	if provider_config.needs_waf_cookies():
 		login_url = f'{provider_config.domain}{provider_config.login_path}'
@@ -446,7 +449,7 @@ async def prepare_cookies(account_name: str, provider_config, user_cookies: dict
 				account_name,
 				login_url,
 				provider_config.waf_cookie_names,
-				use_proxy=provider_config.use_proxy,
+				use_proxy=use_proxy,
 			)
 			if waf_cookies:
 				break
@@ -557,8 +560,13 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 
 	print(f'[INFO] {account_name}: Using provider "{account.provider}" ({provider_config.domain})')
 
+	# 账号级 use_proxy 优先：被 WAF 按「账号 + 出口 IP」拉黑的号直接走代理，不必先撞一次 403
+	use_proxy = account.resolve_use_proxy(provider_config.use_proxy)
+	if use_proxy != provider_config.use_proxy:
+		print(f'[INFO] {account_name}: Proxy forced by account config -> {"enabled" if use_proxy else "disabled"}')
+
 	# 走代理的账号先轮换出口节点，避免多账号同 IP 连续请求被限流
-	if provider_config.use_proxy:
+	if use_proxy:
 		rotate_proxy_node(account_name)
 
 	# 邮箱密码优先
@@ -574,6 +582,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 			account.provider,
 			account.email,
 			account.password,
+			use_proxy_override=use_proxy,
 		)
 		if login_result:
 			all_cookies = login_result.cookies
@@ -587,7 +596,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		if not user_cookies:
 			print(f'[FAILED] {account_name}: Invalid configuration format')
 			return False, None, None
-		all_cookies = await prepare_cookies(account_name, provider_config, user_cookies)
+		all_cookies = await prepare_cookies(account_name, provider_config, user_cookies, use_proxy=use_proxy)
 		auth_method = 'session cookies'
 
 	if not all_cookies:
@@ -601,11 +610,11 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		account_name,
 		provider_config,
 		api_user_override=resolved_api_user,
-		use_proxy=provider_config.use_proxy,
+		use_proxy=use_proxy,
 	)
 
-	# WAF 会盯上被复用的浏览器会话（HTTP 403）：清掉 profile 换代理 IP 重新登录再试一次
-	if not result[0] and account.has_login_credentials() and hit_waf_403(result[1], result[2]):
+	# 已经在代理上还被 403 就没别的招了，只有直连账号才值得清 profile 换代理重来
+	if not result[0] and not use_proxy and account.has_login_credentials() and hit_waf_403(result[1], result[2]):
 		assert account.email is not None and account.password is not None
 		print(f'[RETRY] {account_name}: HTTP 403, wiping browser profile and retrying via proxy')
 		settings = load_browser_login_settings(

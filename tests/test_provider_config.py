@@ -1,6 +1,6 @@
 import json
 
-from utils.config import AppConfig, ProviderConfig
+from utils.config import AccountConfig, AppConfig, ProviderConfig
 
 
 def test_builtin_provider_profile_persistence_defaults(monkeypatch):
@@ -47,3 +47,29 @@ def test_provider_from_dict_inherits_profile_persistence_from_defaults():
 	)
 
 	assert provider.persist_profile is True
+
+
+def test_account_can_force_proxy_regardless_of_provider():
+	# 被 WAF 按「账号 + 出口 IP」拉黑的账号需要直接走代理，不必先撞一次 403
+	account = AccountConfig.from_dict({'name': 'blocked', 'email': 'e', 'password': 'p', 'use_proxy': True}, 0)
+
+	assert account.resolve_use_proxy(False) is True
+
+
+def test_account_can_force_direct_connection():
+	account = AccountConfig.from_dict({'name': 'direct', 'cookies': {'session': 's'}, 'use_proxy': False}, 0)
+
+	assert account.resolve_use_proxy(True) is False
+
+
+def test_account_without_proxy_setting_follows_provider():
+	account = AccountConfig.from_dict({'name': 'plain', 'cookies': {'session': 's'}}, 0)
+
+	assert account.resolve_use_proxy(True) is True
+	assert account.resolve_use_proxy(False) is False
+
+
+def test_account_ignores_non_boolean_proxy_setting():
+	account = AccountConfig.from_dict({'name': 'weird', 'cookies': {'session': 's'}, 'use_proxy': 'yes'}, 0)
+
+	assert account.resolve_use_proxy(False) is False
