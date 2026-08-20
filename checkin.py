@@ -54,6 +54,8 @@ CHECK_IN_SETTLE_DELAY_S = float(os.getenv('CHECKIN_SETTLE_DELAY_S', '3'))
 # agentrouter 对同 IP 连续请求会限流（返回 WAF 页而非 JSON），冷却后重试
 AUTO_CHECKIN_RETRY_ATTEMPTS = int(os.getenv('CHECKIN_AUTO_RETRY_ATTEMPTS', '3'))
 AUTO_CHECKIN_RETRY_DELAY_S = float(os.getenv('CHECKIN_AUTO_RETRY_DELAY_S', '20'))
+# 取 WAF cookies 要用浏览器打开登录页，慢节点会超时，失败后换节点重试
+WAF_COOKIE_ATTEMPTS = int(os.getenv('CHECKIN_WAF_COOKIE_ATTEMPTS', '3'))
 
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
@@ -438,12 +440,19 @@ async def prepare_cookies(account_name: str, provider_config, user_cookies: dict
 
 	if provider_config.needs_waf_cookies():
 		login_url = f'{provider_config.domain}{provider_config.login_path}'
-		waf_cookies = await get_waf_cookies_with_browser(
-			account_name,
-			login_url,
-			provider_config.waf_cookie_names,
-			use_proxy=provider_config.use_proxy,
-		)
+		# 机场节点可能通得过连通性探测却慢到打不开页面，失败就换个节点重来
+		for attempt in range(1, WAF_COOKIE_ATTEMPTS + 1):
+			waf_cookies = await get_waf_cookies_with_browser(
+				account_name,
+				login_url,
+				provider_config.waf_cookie_names,
+				use_proxy=provider_config.use_proxy,
+			)
+			if waf_cookies:
+				break
+			if attempt < WAF_COOKIE_ATTEMPTS:
+				print(f'[RETRY] {account_name}: WAF cookies attempt {attempt}/{WAF_COOKIE_ATTEMPTS} failed, switching node')
+				rotate_proxy_node(account_name)
 		if not waf_cookies:
 			print(f'[FAILED] {account_name}: Unable to get WAF cookies')
 			return None
