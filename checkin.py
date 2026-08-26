@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -62,14 +63,74 @@ DAILY_ATTEMPT_LIMIT = int(os.getenv('CHECKIN_DAILY_ATTEMPT_LIMIT', '2'))
 
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
-# 机场订阅里混着「剩余流量：17 GB」这类信息占位节点，多半连不通，轮换时跳过
-PROXY_INFO_NODE_KEYWORDS = ('剩余流量', '套餐到期', '距离下次重置', '官网', '过期时间')
-_proxy_node_cursor = 0
+# 机场订阅里混着「剩余流量：17 GB」这类信息占位节点，多半连不通；「5倍消耗」这类
+# 高倍率节点会成倍烧套餐流量，签到用不上。两种都不参与轮换
+PROXY_SKIP_KEYWORDS = ('剩余流量', '套餐到期', '距离下次重置', '官网', '过期时间', '倍消耗', '倍率')
+# 每个账号锁定一个地区，只从这几个里挑：延迟低，浏览器登录不容易超时
+#（实测欧美/南美节点会 Page.goto timeout，冷门地区只留作全都不通时的兜底）
+PROXY_PREFERRED_REGIONS = ('香港', '台湾', '新加坡', '日本', '韩国')
+# 全部账号名，main() 启动时填。用来给每个号分一个互不重复的出口地区
+_account_roster: list[str] = []
+# 某账号本次运行已经挪过几个节点。同一个号频繁换 IP 本身就可疑，只在探测不通时才往后挪
+_proxy_attempt: dict[str, int] = {}
+
+
+def node_region(node: str) -> str:
+	"""从节点名里取地区，'🇭🇰|香港-中转 01' -> '香港'"""
+	tail = node.split('|')[-1].strip()
+	return re.split(r'[-\s]', tail, maxsplit=1)[0] or node
+
+
+def candidate_nodes_for(account_name: str, nodes: list[str]) -> list[str]:
+	"""给这个账号排出候选节点：自己那个地区排前面，其他地区兜底
+
+	同一个账号频繁更换出口 IP，本身就是平台判定「这个号不对劲」的特征。所以按账号名
+	做确定性哈希绑定到一个地区——每天都落在同一个地区、同一个节点，只有探测不通时才在
+	同地区内顺延，整个地区都不通才跨地区。不同账号则尽量散在不同地区，免得被一起关联。
+	"""
+	groups: dict[str, list[str]] = {}
+	for node in nodes:
+		groups.setdefault(node_region(node), []).append(node)
+
+	# 低延迟地区优先，同优先级按名字排，保证每次运行分配完全一致
+	def rank(region: str) -> tuple[int, str]:
+		for i, preferred in enumerate(PROXY_PREFERRED_REGIONS):
+			if preferred in region:
+				return (i, region)
+		return (len(PROXY_PREFERRED_REGIONS), region)
+
+	ordered = sorted(groups, key=rank)
+	# 只在低延迟地区里挑「主地区」。若不限制，哈希会均匀撒到全部地区，挑中阿根廷、
+	# 乌克兰这类节点——延迟高到浏览器登录必然超时。它们只留作全都不通时的兜底
+	home_pool = [r for r in ordered if any(p in r for p in PROXY_PREFERRED_REGIONS)] or ordered
+
+	# 各地区轮流出一个节点，铺成一条队列。这样前几个账号自然落在不同地区；账号比地区
+	# 多时也只是回到某个地区的下一个节点，不会两个号共用同一个出口 IP
+	queue = []
+	for i in range(max(len(groups[r]) for r in home_pool)):
+		queue.extend(groups[r][i] for r in home_pool if i < len(groups[r]))
+
+	# 按账号名排序取座位号：用名字而不是配置顺序，调整 accounts.json 也不会让谁换国家
+	roster = sorted(_account_roster)
+	if account_name in roster:
+		seat = roster.index(account_name)
+	else:
+		seat = int(hashlib.sha256(account_name.encode('utf-8')).hexdigest(), 16)
+	home_node = queue[seat % len(queue)]
+
+	# 主节点不通就先在同一个地区里顺延，整个地区都不通才跨地区
+	home = node_region(home_node)
+	same_region = [n for n in groups[home] if n != home_node]
+	others = [n for region in ordered if region != home for n in groups[region]]
+	return [home_node] + same_region[:2] + others
 
 
 def rotate_proxy_node(account_name: str) -> None:
-	"""通过 Clash API 把 CHECKIN 组切到下一个出口节点，让每个账号用不同 IP（规避同 IP 限流）"""
-	global _proxy_node_cursor
+	"""把 CHECKIN 组切到这个账号该用的出口节点
+
+	不是「轮换到下一个」，而是「回到这个账号自己那个节点」：同一个号每天固定 IP，
+	只有节点不通时才顺延到同地区的下一个。
+	"""
 	if not PROXY_CONTROLLER:
 		return
 	proxy_url = os.getenv('CHECKIN_PROXY_URL', '').strip()
@@ -79,14 +140,15 @@ def rotate_proxy_node(account_name: str) -> None:
 			nodes = [
 				n
 				for n in info.get('all', [])
-				if n != 'AUTO' and not any(kw in n for kw in PROXY_INFO_NODE_KEYWORDS)
+				if n != 'AUTO' and not any(kw in n for kw in PROXY_SKIP_KEYWORDS)
 			]
 			if not nodes:
 				return
-			# 最多探测 5 个节点，坏节点跳过
-			for _ in range(min(len(nodes), 5)):
-				target = nodes[_proxy_node_cursor % len(nodes)]
-				_proxy_node_cursor += 1
+			candidates = candidate_nodes_for(account_name, nodes)
+			# 本次运行这个账号已经挪到第几个了：WAF 403 之类的重试会再调一次，得往后挪一格
+			start = _proxy_attempt.get(account_name, 0)
+			_proxy_attempt[account_name] = start + 1
+			for target in candidates[start : start + 3]:
 				client.put(f'{PROXY_CONTROLLER}/proxies/CHECKIN', json={'name': target})
 				if not proxy_url:
 					print(f'[PROXY] {account_name}: exit node -> {target} (unverified)')
@@ -805,6 +867,10 @@ async def main():
 		sys.exit(1)
 
 	print(f'[INFO] Found {len(accounts)} account configurations')
+
+	# 名册定了才能给每个账号分到互不重复的出口地区
+	_account_roster.clear()
+	_account_roster.extend(a.get_display_name(i) for i, a in enumerate(accounts))
 
 	daily_state = load_daily_state()
 	# 本次运行观测到的到账，键为账号名。间隙到账和当场到账都要记进来，通知开关看它
