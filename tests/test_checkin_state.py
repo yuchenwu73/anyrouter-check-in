@@ -22,7 +22,7 @@ from utils.config import ProviderConfig
 def make_detail(reward=0.0, usage=0.0):
 	"""构造一份签到明细，默认是「本次运行余额没动」"""
 	return {
-		'name': 'zjwei@aust.edu.cn',
+		'name': 'AnyRouter-zjwei',
 		'before_quota': 700.37,
 		'before_used': 2970.38,
 		'after_quota': 700.37 + reward,
@@ -66,11 +66,11 @@ def test_daily_state_survives_within_the_same_day(tmp_path, monkeypatch):
 	monkeypatch.setattr(checkin, 'CHECK_IN_STATE_FILE', str(state_file))
 
 	state = load_daily_state()
-	record_daily_reward(state, 'zjwei@aust.edu.cn', 25.0)
+	record_daily_reward(state, 'AnyRouter-zjwei', 25.0)
 	save_daily_state(state)
 
 	reloaded = load_daily_state()
-	assert reloaded['accounts']['zjwei@aust.edu.cn']['reward'] == 25.0
+	assert reloaded['accounts']['AnyRouter-zjwei']['reward'] == 25.0
 
 
 def test_daily_state_resets_on_a_new_day(tmp_path, monkeypatch):
@@ -78,28 +78,28 @@ def test_daily_state_resets_on_a_new_day(tmp_path, monkeypatch):
 	monkeypatch.setattr(checkin, 'CHECK_IN_STATE_FILE', str(state_file))
 	stale = {
 		'date': '2000-01-01',
-		'accounts': {'zjwei@aust.edu.cn': {'reward': 25.0, 'at': '02:21:31', 'max_total': 3645.75}},
+		'accounts': {'AnyRouter-zjwei': {'reward': 25.0, 'at': '02:21:31', 'max_total': 3645.75}},
 	}
 	state_file.write_text(json.dumps(stale), encoding='utf-8')
 
 	accounts = load_daily_state()['accounts']
 
 	# 当日奖励清零，但余额基线要留着，否则认不出间隙里到账的额度
-	assert accounts['zjwei@aust.edu.cn'] == {'max_total': 3645.75}
+	assert accounts['AnyRouter-zjwei'] == {'max_total': 3645.75}
 
 
 def test_first_observation_only_seeds_the_baseline():
 	state = {'date': '2026-08-16', 'accounts': {}}
 
-	assert observe_balance(state, 'zjwei@aust.edu.cn', [3645.75, 3645.75]) == 0.0
-	assert state['accounts']['zjwei@aust.edu.cn']['max_total'] == 3645.75
+	assert observe_balance(state, 'AnyRouter-zjwei', [3645.75, 3645.75]) == 0.0
+	assert state['accounts']['AnyRouter-zjwei']['max_total'] == 3645.75
 
 
 def test_observe_balance_detects_credit_landing_between_runs():
 	# 02:20 跑完基线 3645.75；08:59 再跑时「签到前」就已经多了 $25，本次运行内零变化
-	state = {'date': '2026-08-16', 'accounts': {'zjwei@aust.edu.cn': {'max_total': 3645.75}}}
+	state = {'date': '2026-08-16', 'accounts': {'AnyRouter-zjwei': {'max_total': 3645.75}}}
 
-	assert observe_balance(state, 'zjwei@aust.edu.cn', [3670.75, 3670.75]) == 25.0
+	assert observe_balance(state, 'AnyRouter-zjwei', [3670.75, 3670.75]) == 25.0
 
 
 def test_observe_balance_detects_credit_landing_within_the_run():
@@ -118,24 +118,24 @@ def test_observe_balance_ignores_a_dip_that_recovers():
 
 def test_observe_balance_lowers_the_baseline_when_quota_is_really_cut():
 	# 额度真被下调时基线要跟着降，否则以后再也认不出到账
-	state = {'date': '2026-08-16', 'accounts': {'zjwei@aust.edu.cn': {'max_total': 3670.75}}}
+	state = {'date': '2026-08-16', 'accounts': {'AnyRouter-zjwei': {'max_total': 3670.75}}}
 
-	assert observe_balance(state, 'zjwei@aust.edu.cn', [100.0, 100.0]) == 0.0
-	assert state['accounts']['zjwei@aust.edu.cn']['max_total'] == 100.0
+	assert observe_balance(state, 'AnyRouter-zjwei', [100.0, 100.0]) == 0.0
+	assert state['accounts']['AnyRouter-zjwei']['max_total'] == 100.0
 
 
 def test_observe_balance_does_not_credit_twice_for_the_same_rise():
-	state = {'date': '2026-08-16', 'accounts': {'zjwei@aust.edu.cn': {'max_total': 3645.75}}}
+	state = {'date': '2026-08-16', 'accounts': {'AnyRouter-zjwei': {'max_total': 3645.75}}}
 
-	assert observe_balance(state, 'zjwei@aust.edu.cn', [3670.75, 3670.75]) == 25.0
-	assert observe_balance(state, 'zjwei@aust.edu.cn', [3670.75, 3670.75]) == 0.0
+	assert observe_balance(state, 'AnyRouter-zjwei', [3670.75, 3670.75]) == 25.0
+	assert observe_balance(state, 'AnyRouter-zjwei', [3670.75, 3670.75]) == 0.0
 
 
 def test_record_daily_reward_accumulates_and_keeps_first_landing_time():
 	state = {'date': '2026-08-16', 'accounts': {}}
 
-	first = record_daily_reward(state, 'zjwei@aust.edu.cn', 25.0)
-	second = record_daily_reward(state, 'zjwei@aust.edu.cn', 25.0)
+	first = record_daily_reward(state, 'AnyRouter-zjwei', 25.0)
+	second = record_daily_reward(state, 'AnyRouter-zjwei', 25.0)
 
 	assert second['reward'] == 50.0
 	assert second['at'] == first['at']
@@ -246,7 +246,7 @@ def test_new_day_keeps_balance_readout_but_clears_attempts(tmp_path, monkeypatch
 	stale = {
 		'date': '2000-01-01',
 		'accounts': {
-			'zjwei@aust.edu.cn': {
+			'AnyRouter-zjwei': {
 				'reward': 25.0,
 				'at': '02:21:31',
 				'max_total': 3645.75,
@@ -258,7 +258,7 @@ def test_new_day_keeps_balance_readout_but_clears_attempts(tmp_path, monkeypatch
 	}
 	state_file.write_text(json.dumps(stale), encoding='utf-8')
 
-	record = load_daily_state()['accounts']['zjwei@aust.edu.cn']
+	record = load_daily_state()['accounts']['AnyRouter-zjwei']
 
 	# 余额留着给通知用，当日奖励和尝试次数必须清零，否则新的一天不会再尝试
 	assert record == {'max_total': 3645.75, 'quota': 700.37, 'used': 2945.38}

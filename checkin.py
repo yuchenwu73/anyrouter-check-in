@@ -207,6 +207,17 @@ def today_key() -> str:
 	return datetime.now().strftime('%Y-%m-%d')
 
 
+# 账号改名时把旧键上的记录挪到新键。没有这一步，改名当天的余额基线会重建，
+# 而 observe_balance 头一次只 seed 基线不算到账，那天的 +$25 就会漏报。
+# 旧键不存在时整段是空操作，改完名留着也不碍事
+ACCOUNT_RENAMES = {
+	'zjwei@aust.edu.cn': 'AnyRouter-zjwei',
+	'ycwu@aust.edu.cn': 'AnyRouter-ycwu',
+	'2021303397@aust.edu.cn': 'AnyRouter-2021303397',
+	'2021304644@aust.edu.cn': 'AnyRouter-2021304644',
+}
+
+
 def load_daily_state() -> dict:
 	"""加载今日到账基线，跨天自动重置
 
@@ -234,6 +245,12 @@ def load_daily_state() -> dict:
 					print(f'[STATE] New day {state["date"]} (was {saved.get("date")}), daily rewards reset')
 	except Exception as e:
 		print(f'[WARN] Failed to load daily state: {e}')
+
+	for old_name, new_name in ACCOUNT_RENAMES.items():
+		if old_name in state['accounts'] and new_name not in state['accounts']:
+			state['accounts'][new_name] = state['accounts'].pop(old_name)
+			print(f'[STATE] Renamed account record: {old_name} -> {new_name}')
+
 	return state
 
 
