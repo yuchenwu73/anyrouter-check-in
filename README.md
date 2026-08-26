@@ -9,7 +9,7 @@
 
 ## 本 Fork 的改动
 
-Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了十处改动，其余保持一致，上游更新可正常合并：
+Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了十一处改动，其余保持一致，上游更新可正常合并：
 
 - **时间显示为北京时间** — workflow 里加了 `TZ: Asia/Shanghai`。上游用的是 runner 默认的 UTC，日志和通知里的时间会差 8 小时
 - **通知只在有意义时发** — 上游的规则是「余额一变就通知」，而账号在使用中余额一直在动，一天能收到 4 封。改成只在**签到真正拿到额度**或**有账号签到失败**时推送，正常一天一封
@@ -21,6 +21,7 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - **账号配置模板** — 新增 `config/` 目录，`./config/build.sh` 一条命令完成格式校验、压成单行、复制到剪贴板，不用手工压缩 JSON，漏个逗号也能当场发现（见 [config/README.md](config/README.md)）
 - **运行超时兜底** — 实测遇到过 `apt-get update` 挂死，把 job 拖满 GitHub 默认的 6 小时上限，这次签到什么都没做也不会发通知。现在 job 限时 40 分钟、装系统依赖限时 8 分钟且 apt 失败自动重试一次，卡住会快速失败而不是白烧一次运行
 - **到账后当天不再登录** — 两个平台都把「自动化刷量」写进了封禁条款，而签到额度一天只发一次：钱到手之后再跑，既拿不到东西，又多留一条自动化痕迹。所以确认到账的账号当天直接跳过，一个请求都不发；额度还没刷新时（`checkin_reset_hour`，anyrouter 早 8 点、agentrouter 零点）也不白跑；没到账则最多再试一次（`CHECKIN_DAILY_ATTEMPT_LIMIT`）。这样每个账号每天大约只登录一次，和手动领的频率一致。跳过的账号照样出现在通知里，标注余额是当日记录值
+- **session cookie 到期前预警** — cookie 账号的 session 大约 30 天失效，而上游是等它 401 才报错，那时当天的签到已经漏掉了。NewAPI 的 session cookie 只签名、不加密，签发时间戳可以直接读出来（格式 `base64("<unix 秒>|<载荷>|<签名>")`），据此估算剩余寿命：剩 5 天内就在通知开头提醒（`CHECKIN_COOKIE_WARN_DAYS`），必要时单独发一封。邮箱密码账号每次登录都换发新 cookie，不参与检查
 
 如果这几处改动对你有用，**欢迎 Star 或 Fork**。
 
