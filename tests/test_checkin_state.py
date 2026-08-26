@@ -12,8 +12,11 @@ from checkin import (
 	load_daily_state,
 	observe_balance,
 	record_daily_reward,
+	remember_balance,
 	save_daily_state,
+	skip_reason_today,
 )
+from utils.config import ProviderConfig
 
 
 def make_detail(reward=0.0, usage=0.0):
@@ -189,3 +192,113 @@ def test_notification_ignores_rounding_jitter_as_reward():
 
 	assert '签到获得' not in message
 	assert '今日额度已到账 +$25.00' in message
+def make_provider(reset_hour=0):
+	"""构造一个只关心「额度几点刷新」的 provider"""
+	return ProviderConfig(name='test', domain='https://example.com', checkin_reset_hour=reset_hour)
+
+
+def test_skip_account_that_already_got_credited_today():
+	# 钱已经到手，再登录只会多留一条自动化痕迹
+	reason = skip_reason_today({'reward': 25.0}, make_provider(), now_hour=9)
+
+	assert reason == '今日额度已到账'
+
+
+def test_skip_before_the_platform_refreshes_quota():
+	# anyrouter 早 8 点才刷新，3 点登录也拿不到钱
+	reason = skip_reason_today({}, make_provider(reset_hour=8), now_hour=3)
+
+	assert reason is not None
+	assert '8 点' in reason
+
+
+def test_do_not_skip_once_the_platform_has_refreshed():
+	assert skip_reason_today({}, make_provider(reset_hour=8), now_hour=9) is None
+
+
+def test_zero_reset_hour_never_blocks_by_time():
+	assert skip_reason_today({}, make_provider(reset_hour=0), now_hour=0) is None
+
+
+def test_skip_after_the_daily_attempt_budget_is_spent():
+	record = {'attempts': checkin.DAILY_ATTEMPT_LIMIT}
+
+	reason = skip_reason_today(record, make_provider(), now_hour=9)
+
+	assert reason is not None
+	assert '不再重试' in reason
+
+
+def test_attempts_below_the_budget_still_run():
+	record = {'attempts': checkin.DAILY_ATTEMPT_LIMIT - 1}
+
+	assert skip_reason_today(record, make_provider(), now_hour=9) is None
+
+
+def test_rounding_jitter_does_not_count_as_credited():
+	# 和记账阈值保持一致，0.01 的抖动不算到账，否则当天就再也不尝试了
+	assert skip_reason_today({'reward': 0.01}, make_provider(), now_hour=9) is None
+
+
+def test_new_day_keeps_balance_readout_but_clears_attempts(tmp_path, monkeypatch):
+	state_file = tmp_path / 'checkin_state.json'
+	monkeypatch.setattr(checkin, 'CHECK_IN_STATE_FILE', str(state_file))
+	stale = {
+		'date': '2000-01-01',
+		'accounts': {
+			'zjwei@aust.edu.cn': {
+				'reward': 25.0,
+				'at': '02:21:31',
+				'max_total': 3645.75,
+				'quota': 700.37,
+				'used': 2945.38,
+				'attempts': 2,
+			}
+		},
+	}
+	state_file.write_text(json.dumps(stale), encoding='utf-8')
+
+	record = load_daily_state()['accounts']['zjwei@aust.edu.cn']
+
+	# 余额留着给通知用，当日奖励和尝试次数必须清零，否则新的一天不会再尝试
+	assert record == {'max_total': 3645.75, 'quota': 700.37, 'used': 2945.38}
+
+
+def test_remember_balance_rounds_to_cents():
+	record = {}
+
+	remember_balance(record, 700.3712, 2945.3849)
+
+	assert record == {'quota': 700.37, 'used': 2945.38}
+
+
+def make_skipped_detail(reason='今日额度已到账'):
+	"""构造一份「本次没发请求」的明细，余额取当日记录值"""
+	return {
+		'name': 'AgentRouter-L站大号',
+		'before_quota': 906.04,
+		'before_used': 38.96,
+		'after_quota': 906.04,
+		'after_used': 38.96,
+		'check_in_reward': 0.0,
+		'usage_increase': 0,
+		'balance_change': 0,
+		'success': True,
+		'skipped': reason,
+	}
+
+
+def test_notification_tells_skipped_account_already_got_paid():
+	message = format_check_in_notification(make_skipped_detail(), {'reward': 25.0, 'at': '08:57:24'})
+
+	assert '今日额度已到账 +$25.00（08:57:24 观测到），当日不再重复登录' in message
+	# 余额是当天早先记下的，标出来免得当成实时值
+	assert '当日记录值' in message
+	assert '今日尚未观测到额度到账' not in message
+
+
+def test_notification_explains_a_skip_that_had_no_credit_yet():
+	message = format_check_in_notification(make_skipped_detail(reason='额度每天 8 点后才刷新'), {})
+
+	assert '本次跳过: 额度每天 8 点后才刷新' in message
+	assert '今日额度已到账' not in message

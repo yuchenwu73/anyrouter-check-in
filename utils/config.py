@@ -23,6 +23,9 @@ class ProviderConfig:
 	waf_cookie_names: List[str] | None = None
 	use_proxy: bool = False
 	persist_profile: bool = False
+	# 平台每天几点刷新签到额度（本地时间，CI 里是北京时间）。到点前登录也拿不到钱，
+	# 白白多一次自动化请求，所以直接跳过：anyrouter 早 8 点，agentrouter 零点
+	checkin_reset_hour: int = 0
 
 	def __post_init__(self):
 		required_waf_cookies = set()
@@ -50,6 +53,7 @@ class ProviderConfig:
 		"""
 		default_use_proxy = defaults.use_proxy if defaults else False
 		default_persist_profile = defaults.persist_profile if defaults else False
+		default_reset_hour = defaults.checkin_reset_hour if defaults else 0
 		return cls(
 			name=name,
 			domain=data['domain'],
@@ -61,6 +65,7 @@ class ProviderConfig:
 			waf_cookie_names=data.get('waf_cookie_names', defaults.waf_cookie_names if defaults else None),
 			use_proxy=data.get('use_proxy', default_use_proxy),
 			persist_profile=data.get('persist_profile', default_persist_profile),
+			checkin_reset_hour=data.get('checkin_reset_hour', default_reset_hour),
 		)
 
 	def needs_waf_cookies(self) -> bool:
@@ -93,18 +98,20 @@ class AppConfig:
 				waf_cookie_names=['acw_tc', 'cdn_sec_tc', 'acw_sc__v2'],
 				use_proxy=False,
 				persist_profile=True,
+				checkin_reset_hour=8,
 			),
 			'agentrouter': ProviderConfig(
 				name='agentrouter',
 				domain='https://agentrouter.org',
 				login_path='/login',
-				sign_in_path=None,  # 无需签到接口，查询用户信息时自动完成签到
+				sign_in_path=None,  # 平台没有签到接口，额度靠「一次全新登录」发放
 				user_info_path='/api/user/self',
 				api_user_key='new-api-user',
 				bypass_method='waf_cookies',
 				waf_cookie_names=['acw_tc'],
 				use_proxy=True,
 				persist_profile=False,
+				checkin_reset_hour=0,
 			),
 		}
 

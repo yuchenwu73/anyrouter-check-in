@@ -56,6 +56,9 @@ AUTO_CHECKIN_RETRY_ATTEMPTS = int(os.getenv('CHECKIN_AUTO_RETRY_ATTEMPTS', '3'))
 AUTO_CHECKIN_RETRY_DELAY_S = float(os.getenv('CHECKIN_AUTO_RETRY_DELAY_S', '20'))
 # 取 WAF cookies 要用浏览器打开登录页，慢节点会超时，失败后换节点重试
 WAF_COOKIE_ATTEMPTS = int(os.getenv('CHECKIN_WAF_COOKIE_ATTEMPTS', '3'))
+# 平台明令禁止自动化刷量，而签到额度一天只发一次，多跑的请求纯属白增封号风险。
+# 所以确认到账后当天就不再碰这个账号；没到账时也限次数，留一次容错就够
+DAILY_ATTEMPT_LIMIT = int(os.getenv('CHECKIN_DAILY_ATTEMPT_LIMIT', '2'))
 
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
@@ -156,9 +159,9 @@ def load_daily_state() -> dict:
 					credited = sum(1 for r in state['accounts'].values() if r.get('reward', 0) > 0.01)
 					print(f'[STATE] Daily baseline loaded: {credited} account(s) credited today')
 				else:
-					# 跨天只清零当日奖励，余额基线要留着，否则认不出间隙里到账的额度
+					# 跨天只清零当日奖励和尝试次数，余额基线要留着，否则认不出间隙里到账的额度
 					state['accounts'] = {
-						name: {'max_total': rec['max_total']}
+						name: {k: rec[k] for k in ('max_total', 'quota', 'used') if k in rec}
 						for name, rec in saved['accounts'].items()
 						if isinstance(rec, dict) and 'max_total' in rec
 					}
@@ -211,6 +214,32 @@ def observe_balance(state: dict, account_name: str, totals: list[float]) -> floa
 		record['max_total'] = round(observed, 2)
 		return credited
 	return 0.0
+
+
+def skip_reason_today(record: dict, provider_config, now_hour: int) -> str | None:
+	"""当天是否该跳过这个账号，返回跳过原因；None 表示照常处理
+
+	平台把「自动化刷量」写进了封禁条款，而签到额度一天只发一次：钱到手之后再登录，
+	既拿不到东西，又多留一条自动化痕迹。所以能不发请求就不发，把频率压到和手动一致。
+	"""
+	if record.get('reward', 0) > 0.01:
+		return '今日额度已到账'
+
+	reset_hour = provider_config.checkin_reset_hour
+	if now_hour < reset_hour:
+		return f'额度每天 {reset_hour} 点后才刷新'
+
+	attempts = record.get('attempts', 0)
+	if attempts >= DAILY_ATTEMPT_LIMIT:
+		return f'当日已尝试 {attempts} 次，未到账也不再重试'
+
+	return None
+
+
+def remember_balance(record: dict, quota: float, used: float) -> None:
+	"""记下最近一次读到的余额，供当天后续跳过时填通知"""
+	record['quota'] = round(quota, 2)
+	record['used'] = round(used, 2)
 
 
 def parse_cookies(cookies_data):
@@ -508,6 +537,25 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 
 def format_check_in_notification(detail: dict, today_record: dict | None = None, credited_this_run: bool = False) -> str:
 	"""格式化签到通知消息"""
+	if detail.get('skipped'):
+		# 本次没发请求（风控），余额是当天早先记下的读数，不是实时值
+		reward = (today_record or {}).get('reward', 0.0)
+		landed_at = (today_record or {}).get('at')
+		when = f'（{landed_at} 观测到）' if landed_at else ''
+		if reward > 0.01:
+			tail = f'  今日额度已到账 +${reward:.2f}{when}，当日不再重复登录'
+		else:
+			tail = f'  本次跳过: {detail["skipped"]}'
+		return '\n'.join(
+			[
+				f'[CHECK-IN] {detail["name"]}',
+				'  ━━━━━━━━━━━━━━━━━━━━',
+				f'     余额: ${detail["after_quota"]:.2f}  |  累计消耗: ${detail["after_used"]:.2f}（当日记录值）',
+				'  ━━━━━━━━━━━━━━━━━━━━',
+				tail,
+			]
+		)
+
 	lines = [
 		f'[CHECK-IN] {detail["name"]}',
 		'  ━━━━━━━━━━━━━━━━━━━━',
@@ -776,6 +824,33 @@ async def main():
 
 	for i, account in enumerate(accounts):
 		account_key = f'account_{i + 1}'
+		display_name = account.get_display_name(i)
+		record = daily_state['accounts'].setdefault(display_name, {})
+
+		# 风控：今天已到账、额度还没刷新、当日次数用满，三种情况都不再发请求
+		provider_config = app_config.get_provider(account.provider)
+		skip = skip_reason_today(record, provider_config, datetime.now().hour) if provider_config else None
+		if skip:
+			print(f'\n[SKIP] {display_name}: {skip}，本次不发请求')
+			success_count += 1
+			if 'quota' in record and 'used' in record:
+				current_balances[account_key] = {'quota': record['quota'], 'used': record['used']}
+				account_check_in_details[account_key] = {
+					'name': display_name,
+					'before_quota': record['quota'],
+					'before_used': record['used'],
+					'after_quota': record['quota'],
+					'after_used': record['used'],
+					'check_in_reward': 0.0,
+					'usage_increase': 0,
+					'balance_change': 0,
+					'success': True,
+					'skipped': skip,
+				}
+			continue
+
+		# 尝试次数在发请求前就记上，中途异常退出也不会让当天次数白涨
+		record['attempts'] = record.get('attempts', 0) + 1
 		try:
 			success, user_info_before, user_info_after = await check_in_account(account, i, app_config)
 			if success:
@@ -819,7 +894,8 @@ async def main():
 						'success': success,
 					}
 
-					display_name = account.get_display_name(i)
+					# 记下余额，当天后续运行跳过时拿它填通知
+					remember_balance(record, after_quota, after_used)
 
 					# 到账既可能发生在本次运行内，也可能在上次运行之后（登录动作就会触发签到），
 					# 两种都表现为总额高过基线，所以拿本次两次读数一起跟基线比

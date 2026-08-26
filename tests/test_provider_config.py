@@ -73,3 +73,35 @@ def test_account_ignores_non_boolean_proxy_setting():
 	account = AccountConfig.from_dict({'name': 'weird', 'cookies': {'session': 's'}, 'use_proxy': 'yes'}, 0)
 
 	assert account.resolve_use_proxy(False) is False
+def test_builtin_providers_carry_their_quota_reset_hour(monkeypatch):
+	monkeypatch.delenv('PROVIDERS', raising=False)
+
+	config = AppConfig.load_from_env()
+
+	# anyrouter 早 8 点才刷新额度，agentrouter 是零点
+	assert config.providers['anyrouter'].checkin_reset_hour == 8
+	assert config.providers['agentrouter'].checkin_reset_hour == 0
+
+
+def test_custom_provider_reset_hour_defaults_to_midnight(monkeypatch):
+	monkeypatch.setenv('PROVIDERS', json.dumps({'custom': {'domain': 'https://custom.example.com'}}))
+
+	config = AppConfig.load_from_env()
+
+	assert config.providers['custom'].checkin_reset_hour == 0
+
+
+def test_provider_reset_hour_can_override_builtin(monkeypatch):
+	monkeypatch.setenv('PROVIDERS', json.dumps({'anyrouter': {'domain': 'https://anyrouter.top', 'checkin_reset_hour': 6}}))
+
+	config = AppConfig.load_from_env()
+
+	assert config.providers['anyrouter'].checkin_reset_hour == 6
+
+
+def test_provider_from_dict_inherits_reset_hour_from_defaults():
+	defaults = ProviderConfig(name='anyrouter', domain='https://anyrouter.top', checkin_reset_hour=8)
+
+	provider = ProviderConfig.from_dict('anyrouter', {'domain': 'https://anyrouter.top'}, defaults=defaults)
+
+	assert provider.checkin_reset_hour == 8
