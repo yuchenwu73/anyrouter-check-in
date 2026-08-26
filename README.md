@@ -20,7 +20,7 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - **账号密钥改名** — 本 fork 的 workflow 从 Secret `CHECKIN_ACCOUNTS` 读账号列表（因为里面不只有 AnyRouter，还有 AgentRouter 账号）。下文上游文档里写的 `ANYROUTER_ACCOUNTS` 在本 fork 不生效，配置格式不变
 - **账号配置模板** — 新增 `config/` 目录，`./config/build.sh` 一条命令完成格式校验、压成单行、复制到剪贴板，不用手工压缩 JSON，漏个逗号也能当场发现（见 [config/README.md](config/README.md)）
 - **运行超时兜底** — 实测遇到过 `apt-get update` 挂死，把 job 拖满 GitHub 默认的 6 小时上限，这次签到什么都没做也不会发通知。现在 job 限时 40 分钟、装系统依赖限时 8 分钟且 apt 失败自动重试一次，卡住会快速失败而不是白烧一次运行
-- **到账后当天不再登录** — 两个平台都把「自动化刷量」写进了封禁条款，而签到额度一天只发一次：钱到手之后再跑，既拿不到东西，又多留一条自动化痕迹。所以确认到账的账号当天直接跳过，一个请求都不发；额度还没刷新时（`checkin_reset_hour`，anyrouter 早 8 点、agentrouter 零点）也不白跑；没到账则最多再试一次（`CHECKIN_DAILY_ATTEMPT_LIMIT`）。这样每个账号每天大约只登录一次，和手动领的频率一致。跳过的账号照样出现在通知里，标注余额是当日记录值
+- **到账后当天不再登录** — 两个平台都把「自动化刷量」写进了封禁条款，而签到额度一天只发一次：钱到手之后再跑，既拿不到东西，又多留一条自动化痕迹。所以确认到账的账号当天直接跳过，一个请求都不发；额度还没刷新时（`checkin_reset_hour`，anyrouter 早 8 点、agentrouter 零点）也不白跑；没到账则最多再试一次（`CHECKIN_DAILY_ATTEMPT_LIMIT`）。另外两个平台刷新额度的时间不一样（agentrouter 零点、anyrouter 早 8 点），各自一到点就签的话，一天会分两批到账、收两封通知；所以统一等到 `CHECKIN_START_HOUR`（默认 `8`）之后才动手，所有账号在同一次运行里签完，只发一封汇总邮件，代价是 agentrouter 的额度晚几小时到手（当天领到就不作废），设成 `0` 可恢复「各平台一到刷新点就签」。这样每个账号每天大约只登录一次，和手动领的频率一致。跳过的账号照样出现在通知里，标注余额是当日记录值
 - **session cookie 到期前预警** — cookie 账号的 session 大约 30 天失效，而上游是等它 401 才报错，那时当天的签到已经漏掉了。NewAPI 的 session cookie 只签名、不加密，签发时间戳可以直接读出来（格式 `base64("<unix 秒>|<载荷>|<签名>")`），据此估算剩余寿命：剩 5 天内就在通知开头提醒（`CHECKIN_COOKIE_WARN_DAYS`），必要时单独发一封。邮箱密码账号每次登录都换发新 cookie，不参与检查
 
 如果这几处改动对你有用，**欢迎 Star 或 Fork**。
@@ -288,7 +288,7 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - `anyrouter`：
   - `bypass_method: "waf_cookies"`（需要先获取 WAF cookies，然后执行签到）
   - `sign_in_path: "/api/user/sign_in"`
-  - `checkin_reset_hour: 8`（早 8 点才刷新额度）
+  - `checkin_reset_hour: 8`（早 8 点才刷新额度；实际起签时间取它和 `CHECKIN_START_HOUR` 里更晚的那个）
 - `agentrouter`：
   - `bypass_method: "waf_cookies"`（需要获取 `acw_tc`）
   - `sign_in_path: null`（平台没有签到接口，额度靠「一次全新登录」发放）

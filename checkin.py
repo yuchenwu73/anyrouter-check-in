@@ -61,6 +61,10 @@ WAF_COOKIE_ATTEMPTS = int(os.getenv('CHECKIN_WAF_COOKIE_ATTEMPTS', '3'))
 # 平台明令禁止自动化刷量，而签到额度一天只发一次，多跑的请求纯属白增封号风险。
 # 所以确认到账后当天就不再碰这个账号；没到账时也限次数，留一次容错就够
 DAILY_ATTEMPT_LIMIT = int(os.getenv('CHECKIN_DAILY_ATTEMPT_LIMIT', '2'))
+# 两个平台刷新额度的时间不一样（agentrouter 零点、anyrouter 早 8 点），各自一到点就签的话
+# 一天会分两批到账、发两封通知。统一等到这个点之后再一起签，就只有一封汇总邮件。
+# 代价是 agentrouter 的额度晚 8 小时到手，反正当天领到就不会作废；设成 0 恢复原行为
+CHECKIN_START_HOUR = int(os.getenv('CHECKIN_START_HOUR', '8'))
 # NewAPI 的 session cookie 大约 30 天到期，剩这么多天就开始提醒——别等 401 失败了才换
 SESSION_COOKIE_LIFETIME_DAYS = int(os.getenv('CHECKIN_COOKIE_LIFETIME_DAYS', '30'))
 SESSION_COOKIE_WARN_DAYS = int(os.getenv('CHECKIN_COOKIE_WARN_DAYS', '5'))
@@ -311,6 +315,9 @@ def skip_reason_today(record: dict, provider_config, now_hour: int) -> str | Non
 	reset_hour = provider_config.checkin_reset_hour
 	if now_hour < reset_hour:
 		return f'额度每天 {reset_hour} 点后才刷新'
+
+	if now_hour < CHECKIN_START_HOUR:
+		return f'等 {CHECKIN_START_HOUR} 点后和其它账号一起签，只发一封通知'
 
 	attempts = record.get('attempts', 0)
 	if attempts >= DAILY_ATTEMPT_LIMIT:

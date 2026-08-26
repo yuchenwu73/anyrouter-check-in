@@ -216,8 +216,35 @@ def test_do_not_skip_once_the_platform_has_refreshed():
 	assert skip_reason_today({}, make_provider(reset_hour=8), now_hour=9) is None
 
 
-def test_zero_reset_hour_never_blocks_by_time():
+def test_zero_reset_hour_still_waits_for_the_shared_checkin_hour():
+	# agentrouter 零点就刷新额度，但为了和 anyrouter 攒成一封通知，仍然等到统一时间再签
+	reason = skip_reason_today({}, make_provider(reset_hour=0), now_hour=0)
+
+	assert reason is not None
+	assert '一起签' in reason
+
+
+def test_shared_checkin_hour_lets_both_platforms_through():
+	# 到点之后两个平台都放行，同一次运行里一起到账
+	assert skip_reason_today({}, make_provider(reset_hour=0), now_hour=checkin.CHECKIN_START_HOUR) is None
+	assert skip_reason_today({}, make_provider(reset_hour=8), now_hour=checkin.CHECKIN_START_HOUR) is None
+
+
+def test_disabling_the_shared_hour_restores_per_platform_timing(monkeypatch):
+	# CHECKIN_START_HOUR=0 时恢复「各平台一到刷新点就签」
+	monkeypatch.setattr(checkin, 'CHECKIN_START_HOUR', 0)
+
 	assert skip_reason_today({}, make_provider(reset_hour=0), now_hour=0) is None
+
+
+def test_platform_reset_hour_wins_when_it_is_later(monkeypatch):
+	# 平台比统一时间更晚刷新时，理由要说平台没刷新，而不是「等着一起签」
+	monkeypatch.setattr(checkin, 'CHECKIN_START_HOUR', 8)
+
+	reason = skip_reason_today({}, make_provider(reset_hour=10), now_hour=9)
+
+	assert reason is not None
+	assert '10 点' in reason
 
 
 def test_skip_after_the_daily_attempt_budget_is_spent():
