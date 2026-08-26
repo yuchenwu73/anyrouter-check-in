@@ -4,6 +4,7 @@ AnyRouter.top 自动签到脚本
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import os
@@ -60,6 +61,9 @@ WAF_COOKIE_ATTEMPTS = int(os.getenv('CHECKIN_WAF_COOKIE_ATTEMPTS', '3'))
 # 平台明令禁止自动化刷量，而签到额度一天只发一次，多跑的请求纯属白增封号风险。
 # 所以确认到账后当天就不再碰这个账号；没到账时也限次数，留一次容错就够
 DAILY_ATTEMPT_LIMIT = int(os.getenv('CHECKIN_DAILY_ATTEMPT_LIMIT', '2'))
+# NewAPI 的 session cookie 大约 30 天到期，剩这么多天就开始提醒——别等 401 失败了才换
+SESSION_COOKIE_LIFETIME_DAYS = int(os.getenv('CHECKIN_COOKIE_LIFETIME_DAYS', '30'))
+SESSION_COOKIE_WARN_DAYS = int(os.getenv('CHECKIN_COOKIE_WARN_DAYS', '5'))
 
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
@@ -317,6 +321,44 @@ def parse_cookies(cookies_data):
 				cookies_dict[key] = value
 		return cookies_dict
 	return {}
+
+
+def session_cookie_days_left(session: str) -> int | None:
+	"""估算这个 session cookie 还能活几天，认不出格式就返回 None
+
+	NewAPI 用 gorilla/securecookie，格式是 base64("<签发 unix 秒>|<载荷>|<签名>")——
+	只签名、不加密，所以签发时间能直接读出来。拿它推剩余寿命，好在 401 之前提醒换值。
+	"""
+	try:
+		raw = base64.b64decode(session + '=' * (-len(session) % 4))
+		issued = datetime.fromtimestamp(int(raw.split(b'|', 1)[0]))
+	except Exception:
+		return None
+	age = (datetime.now() - issued).days
+	# 明显不合理的时间戳（未来、或者早于平台存在）说明没解对，别拿它误报
+	if age < 0 or age > 3650:
+		return None
+	return SESSION_COOKIE_LIFETIME_DAYS - age
+
+
+def cookie_expiry_warnings(accounts: list) -> list[str]:
+	"""挑出 cookie 快过期的账号。邮箱密码账号每次登录都换新 cookie，不用管"""
+	warnings = []
+	for i, account in enumerate(accounts):
+		if account.has_login_credentials():
+			continue
+		session = parse_cookies(account.cookies).get('session')
+		if not session:
+			continue
+		days_left = session_cookie_days_left(session)
+		if days_left is None or days_left > SESSION_COOKIE_WARN_DAYS:
+			continue
+		name = account.get_display_name(i)
+		if days_left > 0:
+			warnings.append(f'[COOKIE] {name}: session 约剩 {days_left} 天到期，建议尽快更新')
+		else:
+			warnings.append(f'[COOKIE] {name}: session 已超期约 {-days_left} 天，随时可能报 401')
+	return warnings
 
 
 async def get_waf_cookies_with_browser(
@@ -1015,6 +1057,15 @@ async def main():
 				)
 				if not any(account_name in item for item in notification_content):
 					notification_content.append(account_result)
+
+	# cookie 快到期就主动提醒：邮箱密码账号每次登录换新值不用管，cookie 账号得手动换，
+	# 等它 401 失败了才发现就已经漏签了。放在通知最前面，别被账号明细淹掉
+	cookie_warnings = cookie_expiry_warnings(accounts)
+	for warning in cookie_warnings:
+		print(warning)
+	if cookie_warnings:
+		need_notify = True
+		notification_content[0:0] = cookie_warnings
 
 	if current_balance_hash:
 		save_balance_hash(current_balance_hash)
