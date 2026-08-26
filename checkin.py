@@ -542,19 +542,15 @@ def format_check_in_notification(detail: dict, today_record: dict | None = None,
 		reward = (today_record or {}).get('reward', 0.0)
 		landed_at = (today_record or {}).get('at')
 		when = f'（{landed_at} 观测到）' if landed_at else ''
+		lines = [f'[CHECK-IN] {detail["name"]}', '  ━━━━━━━━━━━━━━━━━━━━']
+		if 'after_quota' in detail:
+			lines.append(f'     余额: ${detail["after_quota"]:.2f}  |  累计消耗: ${detail["after_used"]:.2f}（当日记录值）')
+			lines.append('  ━━━━━━━━━━━━━━━━━━━━')
 		if reward > 0.01:
-			tail = f'  今日额度已到账 +${reward:.2f}{when}，当日不再重复登录'
+			lines.append(f'  今日额度已到账 +${reward:.2f}{when}，当日不再重复登录')
 		else:
-			tail = f'  本次跳过: {detail["skipped"]}'
-		return '\n'.join(
-			[
-				f'[CHECK-IN] {detail["name"]}',
-				'  ━━━━━━━━━━━━━━━━━━━━',
-				f'     余额: ${detail["after_quota"]:.2f}  |  累计消耗: ${detail["after_used"]:.2f}（当日记录值）',
-				'  ━━━━━━━━━━━━━━━━━━━━',
-				tail,
-			]
-		)
+			lines.append(f'  本次跳过: {detail["skipped"]}')
+		return '\n'.join(lines)
 
 	lines = [
 		f'[CHECK-IN] {detail["name"]}',
@@ -833,20 +829,27 @@ async def main():
 		if skip:
 			print(f'\n[SKIP] {display_name}: {skip}，本次不发请求')
 			success_count += 1
+			# 跳过的账号照样进通知，否则用户会以为账号漏跑了。余额可能还没记下来
+			# （state 里没有当天读数），那就只报状态，不编造数字
+			detail: dict = {
+				'name': display_name,
+				'check_in_reward': 0.0,
+				'usage_increase': 0,
+				'balance_change': 0,
+				'success': True,
+				'skipped': skip,
+			}
 			if 'quota' in record and 'used' in record:
 				current_balances[account_key] = {'quota': record['quota'], 'used': record['used']}
-				account_check_in_details[account_key] = {
-					'name': display_name,
-					'before_quota': record['quota'],
-					'before_used': record['used'],
-					'after_quota': record['quota'],
-					'after_used': record['used'],
-					'check_in_reward': 0.0,
-					'usage_increase': 0,
-					'balance_change': 0,
-					'success': True,
-					'skipped': skip,
-				}
+				detail.update(
+					{
+						'before_quota': record['quota'],
+						'before_used': record['used'],
+						'after_quota': record['quota'],
+						'after_used': record['used'],
+					}
+				)
+			account_check_in_details[account_key] = detail
 			continue
 
 		# 尝试次数在发请求前就记上，中途异常退出也不会让当天次数白涨

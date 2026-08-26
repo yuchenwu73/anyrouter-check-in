@@ -302,3 +302,21 @@ def test_notification_explains_a_skip_that_had_no_credit_yet():
 
 	assert '本次跳过: 额度每天 8 点后才刷新' in message
 	assert '今日额度已到账' not in message
+
+
+def test_notification_still_lists_a_skipped_account_without_a_balance_readout():
+	# 老状态文件里没有当天余额，也不能让账号整条从通知里消失
+	detail = {
+		'name': 'AgentRouter-L站小号',
+		'check_in_reward': 0.0,
+		'usage_increase': 0,
+		'balance_change': 0,
+		'success': True,
+		'skipped': '今日额度已到账',
+	}
+
+	message = format_check_in_notification(detail, {'reward': 25.0, 'at': '08:57:24'})
+
+	assert 'AgentRouter-L站小号' in message
+	assert '今日额度已到账 +$25.00（08:57:24 观测到），当日不再重复登录' in message
+	assert '余额:' not in message
