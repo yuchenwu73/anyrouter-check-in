@@ -9,7 +9,7 @@
 
 ## 本 Fork 的改动
 
-Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了九处改动，其余保持一致，上游更新可正常合并：
+Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了十处改动，其余保持一致，上游更新可正常合并：
 
 - **时间显示为北京时间** — workflow 里加了 `TZ: Asia/Shanghai`。上游用的是 runner 默认的 UTC，日志和通知里的时间会差 8 小时
 - **通知只在有意义时发** — 上游的规则是「余额一变就通知」，而账号在使用中余额一直在动，一天能收到 4 封。改成只在**签到真正拿到额度**或**有账号签到失败**时推送，正常一天一封
@@ -20,10 +20,13 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - **账号密钥改名** — 本 fork 的 workflow 从 Secret `CHECKIN_ACCOUNTS` 读账号列表（因为里面不只有 AnyRouter，还有 AgentRouter 账号）。下文上游文档里写的 `ANYROUTER_ACCOUNTS` 在本 fork 不生效，配置格式不变
 - **账号配置模板** — 新增 `config/` 目录，`./config/build.sh` 一条命令完成格式校验、压成单行、复制到剪贴板，不用手工压缩 JSON，漏个逗号也能当场发现（见 [config/README.md](config/README.md)）
 - **运行超时兜底** — 实测遇到过 `apt-get update` 挂死，把 job 拖满 GitHub 默认的 6 小时上限，这次签到什么都没做也不会发通知。现在 job 限时 40 分钟、装系统依赖限时 8 分钟且 apt 失败自动重试一次，卡住会快速失败而不是白烧一次运行
+- **到账后当天不再登录** — 两个平台都把「自动化刷量」写进了封禁条款，而签到额度一天只发一次：钱到手之后再跑，既拿不到东西，又多留一条自动化痕迹。所以确认到账的账号当天直接跳过，一个请求都不发；额度还没刷新时（`checkin_reset_hour`，anyrouter 早 8 点、agentrouter 零点）也不白跑；没到账则最多再试一次（`CHECKIN_DAILY_ATTEMPT_LIMIT`）。这样每个账号每天大约只登录一次，和手动领的频率一致。跳过的账号照样出现在通知里，标注余额是当日记录值
 
 如果这几处改动对你有用，**欢迎 Star 或 Fork**。
 
-> **关于 AgentRouter 的每日额度**：实测 agentrouter 前端没有任何签到接口，$25 是**一次全新登录**的副产品——登录接口返回 `checked_in: true` 时才发放。用已有 session cookie 请求 `/api/user/self` 并不会触发（上游文档里「查询用户信息时自动签到」的说法不准确）。所以 OAuth（Linux DO / GitHub）注册的账号只能手动退出重登领取，脚本负责盯余额、确认到账、异常时告警。邮箱密码账号不受影响：浏览器登录动作本身就是一次全新登录，额度会照常到账。
+> **关于 AgentRouter 的每日额度**：实测 agentrouter 前端没有任何签到接口（全站没有 sign_in / checkin / claim 一类的路径），$25 是**一次全新登录**的副产品——登录接口返回 `checked_in: true` 时才发放。用已有 session cookie 请求 `/api/user/self` 并不会触发（上游文档里「查询用户信息时自动签到」的说法不准确）。
+>
+> OAuth（Linux DO / GitHub）注册的账号原本只能手动退出重登来领，但**绑定邮箱并设置密码后就能走浏览器登录**，和邮箱密码账号一样自动到账：`GET /api/verification?email=…` 发验证码 → `GET /api/oauth/email/bind?email=…&code=…` 绑定 → `GET /api/reset_password?email=…` 走忘记密码流程拿到密码。这比把 Linux DO / GitHub 的会话 cookie 存进 Secret 安全得多——那等于把上游账号本身的钥匙交出去。注意 `checked_in: true` 只表示「今天签到过了」，当天第二次登录同样返回 true，所以不能拿它判断本次有没有进账，仍要看总额（余额 + 累计消耗）是否上升。
 
 ---
 
@@ -262,6 +265,7 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
   - `"waf_cookies"`：使用 CloakBrowser 打开浏览器获取 WAF cookies 后再执行签到
   - 不设置或 `null`：直接使用用户 cookies 执行签到（适合无 WAF 保护的网站）
 - `waf_cookie_names` (可选)：绕过 WAF 所需 cookie 的名称列表，`bypass_method` 为 `waf_cookies` 时必须设置
+- `checkin_reset_hour` (可选)：平台每天几点刷新签到额度，默认 `0`。到点之前脚本不会为该平台的账号发任何请求——反正拿不到额度，白跑一趟只会多留一条自动化痕迹。内置 `anyrouter` 为 `8`，`agentrouter` 为 `0`
 
 **配置示例**（完整）：
 
@@ -283,10 +287,12 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - `anyrouter`：
   - `bypass_method: "waf_cookies"`（需要先获取 WAF cookies，然后执行签到）
   - `sign_in_path: "/api/user/sign_in"`
+  - `checkin_reset_hour: 8`（早 8 点才刷新额度）
 - `agentrouter`：
   - `bypass_method: "waf_cookies"`（需要获取 `acw_tc`）
-  - `sign_in_path: null`（查询用户信息时自动签到）
+  - `sign_in_path: null`（平台没有签到接口，额度靠「一次全新登录」发放）
   - `use_proxy: true`
+  - `checkin_reset_hour: 0`（零点刷新）
 
 **重要提示**：
 
