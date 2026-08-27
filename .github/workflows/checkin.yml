@@ -1,7 +1,11 @@
 name: AnyRouter 自动签到
 on:
   schedule:
-    - cron: '0 */6 * * *'
+    # 北京时间 8:25 / 10:25 / 12:25 / 20:25（GitHub 通常再延迟 1~1.5 小时）。
+    # 两点讲究：一是避开整点，GitHub 在整点负载最高，schedule 会被延迟甚至直接丢弃
+    #（实测 2026-08-27 早 8 点那次就没触发）；二是全部排在额度刷新之后，
+    # 上午留三次机会，丢掉一两次也还能当天领到，晚上那次是最后兜底
+    - cron: '25 0,2,4,12 * * *'
   workflow_dispatch:
     inputs:
       debug:
@@ -9,6 +13,12 @@ on:
         required: false
         default: false
         type: boolean
+
+# 同一时间只允许一次签到在跑：手动触发和定时任务撞上的话，同一个账号会被登录两次，
+# 白白多一条自动化痕迹，状态文件也会互相覆盖。排队等待而不是取消，免得跑到一半被打断
+concurrency:
+  group: checkin
+  cancel-in-progress: false
 
 jobs:
   checkin:
