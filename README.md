@@ -9,7 +9,7 @@
 
 ## 本 Fork 的改动
 
-Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了十二处改动，其余保持一致，上游更新可正常合并：
+Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-check-in)，在其基础上做了十三处改动，其余保持一致，上游更新可正常合并：
 
 - **时间显示为北京时间** — workflow 里加了 `TZ: Asia/Shanghai`。上游用的是 runner 默认的 UTC，日志和通知里的时间会差 8 小时
 - **通知只在有意义时发** — 上游的规则是「余额一变就通知」，而账号在使用中余额一直在动，一天能收到 4 封。改成只在**签到真正拿到额度**或**有账号签到失败**时推送，正常一天一封
@@ -23,6 +23,7 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - **到账后当天不再登录** — 两个平台都把「自动化刷量」写进了封禁条款，而签到额度一天只发一次：钱到手之后再跑，既拿不到东西，又多留一条自动化痕迹。所以确认到账的账号当天直接跳过，一个请求都不发；额度还没刷新时（`checkin_reset_hour`，anyrouter 早 8 点、agentrouter 零点）也不白跑；没到账则最多再试一次（`CHECKIN_DAILY_ATTEMPT_LIMIT`）。另外两个平台刷新额度的时间不一样（agentrouter 零点、anyrouter 早 8 点），各自一到点就签的话，一天会分两批到账、收两封通知；所以统一等到 `CHECKIN_START_HOUR`（默认 `8`）之后才动手，所有账号在同一次运行里签完，只发一封汇总邮件，代价是 agentrouter 的额度晚几小时到手（当天领到就不作废），设成 `0` 可恢复「各平台一到刷新点就签」。这样每个账号每天大约只登录一次，和手动领的频率一致。跳过的账号照样出现在通知里，标注余额是当日记录值
 - **定时任务避开整点，顺带防撞车** — GitHub 的 `schedule` 在高负载时会延迟、甚至**直接丢弃**（实测 2026-08-27 早 8 点那次就没触发，官方文档也建议排在整点之外）。上游的 `0 */6 * * *` 四次全踩在整点上，其中北京时间凌晨 2 点那次还必然空跑——那时候两个平台的额度都没刷新。改成 `25 0,2,4,12 * * *`（北京 8:25 / 10:25 / 12:25 / 20:25）：全部排在额度刷新之后，上午留三次机会，被丢掉一两次也还能当天领到，晚上那次兜底。另外加了 `concurrency` 组，手动触发和定时任务撞上时排队而不是并发跑——否则同一个账号会被登录两次，多留一条自动化痕迹，两边的状态文件还会互相覆盖
 - **session cookie 到期前预警** — cookie 账号的 session 大约 30 天失效，而上游是等它 401 才报错，那时当天的签到已经漏掉了。NewAPI 的 session cookie 只签名、不加密，签发时间戳可以直接读出来（格式 `base64("<unix 秒>|<载荷>|<签名>")`），据此估算剩余寿命：剩 5 天内就在通知开头提醒（`CHECKIN_COOKIE_WARN_DAYS`），必要时单独发一封。邮箱密码账号每次登录都换发新 cookie，不参与检查
+- **外部触发方案（文档）** — 上一条只是把定时点挪开，治不了根：GitHub 的 `schedule` 在高负载时会**整次丢弃**，这是官方明说的设计，配置怎么改都躲不掉（实测一次 Actions 故障期间 4 个调度点丢了 3 个）。彻底的办法是让外部定时服务调 `workflow_dispatch` 的 REST API，**等于替你按下 Actions 页面上的 "Run workflow" 按钮**——不进调度队列，请求一到就立刻创建运行，没有丢弃这回事。新增 [docs/external-trigger.md](docs/external-trigger.md)，写了免费方案 cron-job.org 的逐字段配置、细粒度令牌怎么开（只给一个仓库的 `Actions: Read and write`，泄露了也只能让签到多跑几次）、返回码对照表和命令行验证方法。账号密码仍然只存在 GitHub Secret 里，不经过第三方。GitHub 自带的 `schedule` 建议保留当第二层兜底，两条路径由 `concurrency` 保证不会撞车
 
 如果这几处改动对你有用，**欢迎 Star 或 Fork**。
 
@@ -151,6 +152,8 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 
 - 脚本每 6 小时执行一次（1. action 无法准确触发，基本延时 1~1.5h；2. 目前观测到 anyrouter 的签到是每 24h 而不是零点就可签到）
 - 你也可以随时手动触发签到
+
+> 本 fork 补充：上面第 1 点其实还要更糟——GitHub 高负载时会把整次定时运行**直接丢弃**，当天就漏签了。想彻底解决见 [docs/external-trigger.md](docs/external-trigger.md)，用免费的外部定时服务替你按 "Run workflow"。
 
 ## 注意事项
 
