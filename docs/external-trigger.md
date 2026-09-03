@@ -11,11 +11,12 @@ GitHub Actions 的 `schedule`（定时触发）**不保证准时，也不保证�
 
 实测数据（本 fork 2026-08 观测）：
 
-| 现象 | 数据 |
-|---|---|
-| 正常延迟 | 30~60 分钟 |
-| Actions 故障期间 | 4 个调度点丢了 3 个，剩下 1 个延迟 265 分钟 |
-| 触发间隔 | 从稳定的 6 小时变成 13 小时、27 小时，时间点随机 |
+
+| 现象             | 数据                                             |
+| ------------------ | -------------------------------------------------- |
+| 正常延迟         | 30~60 分钟                                       |
+| Actions 故障期间 | 4 个调度点丢了 3 个，剩下 1 个延迟 265 分钟      |
+| 触发间隔         | 从稳定的 6 小时变成 13 小时、27 小时，时间点随机 |
 
 对签到来说，「今天整个没跑」意味着当天额度作废。所以需要一条不依赖 GitHub 调度队列的触发路径。
 
@@ -25,10 +26,11 @@ workflow 里除了 `schedule`，还有 `workflow_dispatch`——就是 Actions �
 
 关键区别在于：
 
-| 触发方式 | 走的路 | 会被丢弃吗 |
-|---|---|---|
-| `schedule` | 进 GitHub 的**调度队列**，等资源 | **会** |
-| `workflow_dispatch` | 直接创建运行 | **不会** |
+
+| 触发方式            | 走的路                           | 会被丢弃吗 |
+| --------------------- | ---------------------------------- | ------------ |
+| `schedule`          | 进 GitHub 的**调度队列**，等资源 | **会**     |
+| `workflow_dispatch` | 直接创建运行                     | **不会**   |
 
 而 `workflow_dispatch` 有对应的 REST API。让一个外部定时服务每天按点调用这个 API，效果**完全等同于你手动点了那个按钮**——请求一到，GitHub 立刻创建运行，没有排队，没有丢弃。
 
@@ -46,12 +48,13 @@ cron-job.org ──POST──> GitHub API ──> 立即创建运行 ──> 签
 1. 打开 https://github.com/settings/personal-access-tokens/new
 2. 按下表填：
 
-| 字段 | 填什么 |
-|---|---|
-| Token name | 随便，比如 `checkin-trigger` |
-| Expiration | 想省事就选 `No expiration`；选了具体日期，到期后触发会静默失效 |
-| Repository access | 选 **Only select repositories** → 只勾你 fork 的 `anyrouter-check-in` |
-| Permissions → Repository permissions → **Actions** | 设为 **Read and write** |
+
+| 字段                                                | 填什么                                                                |
+| ----------------------------------------------------- | ----------------------------------------------------------------------- |
+| Token name                                          | 随便，比如`checkin-trigger`                                           |
+| Expiration                                          | 想省事就选`No expiration`；选了具体日期，到期后触发会静默失效         |
+| Repository access                                   | 选**Only select repositories** → 只勾你 fork 的 `anyrouter-check-in` |
+| Permissions → Repository permissions →**Actions** | 设为**Read and write**                                                |
 
 **其它权限一个都不要给。** 配好后 Permissions 那栏应该只显示 Actions 一项。
 
@@ -117,13 +120,14 @@ Crontab 五个位置从左到右是 **分 时 日 月 星期**，`*` 表示「�
 
 保存后点 **Test run**，看返回码：
 
-| 返回码 | 含义 |
-|---|---|
-| **204** | ✅ **成功**。GitHub 这个接口成功时不返回任何内容，别当成失败 |
-| 404 | 请求方法还是 GET，或者仓库路径/分支名写错 |
-| 401 | 令牌无效，或漏了 `Bearer ` 前缀（注意那个空格） |
-| 403 | 令牌权限不对，检查 Actions 是不是 Read and **write** |
-| 422 | 请求本体写错，或 `ref` 里的分支不存在 |
+
+| 返回码  | 含义                                                        |
+| --------- | ------------------------------------------------------------- |
+| **204** | ✅**成功**。GitHub 这个接口成功时不返回任何内容，别当成失败 |
+| 404     | 请求方法还是 GET，或者仓库路径/分支名写错                   |
+| 401     | 令牌无效，或漏了`Bearer ` 前缀（注意那个空格）              |
+| 403     | 令牌权限不对，检查 Actions 是不是 Read and**write**         |
+| 422     | 请求本体写错，或`ref` 里的分支不存在                        |
 
 看到 204 后，去仓库的 Actions 页面确认——应该在同一秒出现一次新的运行。
 
