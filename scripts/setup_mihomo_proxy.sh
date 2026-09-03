@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 # 通过 mihomo 拉取订阅、启动本地代理并探测可用节点。
 # 环境变量:
-#   PROXY_SUBSCRIPTION_URL  订阅链接（必填才启用）
+#   PROXY_SUBSCRIPTION_URLS 多个订阅链接，每行一个（优先）
+#   PROXY_SUBSCRIPTION_URL  单个订阅链接（兼容旧配置）
 #   PROXY_TEST_URL          探测目标，默认 https://www.google.com/generate_204
 #   PROXY_REQUIRED          true 时探测失败则退出 1
 #   PROXY_PORT              本地 mixed-port，默认 7890
 
 set -euo pipefail
 
-if [[ -z "${PROXY_SUBSCRIPTION_URL:-}" ]]; then
-	echo "[INFO] PROXY_SUBSCRIPTION_URL not set, skip proxy setup"
+SUBSCRIPTION_INPUT="${PROXY_SUBSCRIPTION_URLS:-${PROXY_SUBSCRIPTION_URL:-}}"
+SUBSCRIPTION_URLS=()
+while IFS= read -r subscription_url; do
+	subscription_url="${subscription_url%$'\r'}"
+	if [[ -n "${subscription_url//[[:space:]]/}" ]]; then
+		SUBSCRIPTION_URLS+=("${subscription_url}")
+	fi
+done <<< "${SUBSCRIPTION_INPUT}"
+
+if (( ${#SUBSCRIPTION_URLS[@]} == 0 )); then
+	echo "[INFO] Proxy subscription not set, skip proxy setup"
 	exit 0
 fi
 
@@ -37,6 +47,7 @@ chmod +x "mihomo-linux-amd64-${MIHOMO_VERSION}"
 MIHOMO_BIN="${PROXY_DIR}/mihomo-linux-amd64-${MIHOMO_VERSION}"
 
 PROXY_CONTROLLER_PORT="${PROXY_CONTROLLER_PORT:-9091}"
+PROVIDER_NAMES=()
 
 cat > config.yaml <<EOF
 mixed-port: ${PROXY_PORT}
@@ -48,16 +59,27 @@ log-level: warning
 unified-delay: true
 
 proxy-providers:
-  subscription:
+EOF
+
+for index in "${!SUBSCRIPTION_URLS[@]}"; do
+	provider_name="subscription_$((index + 1))"
+	PROVIDER_NAMES+=("${provider_name}")
+	cat >> config.yaml <<EOF
+  ${provider_name}:
     type: http
-    url: "${PROXY_SUBSCRIPTION_URL}"
+    url: "${SUBSCRIPTION_URLS[index]}"
     interval: 3600
-    path: ./subscription.yaml
+    path: ./subscription_$((index + 1)).yaml
     health-check:
       enable: true
       interval: 300
       url: https://www.gstatic.com/generate_204
+    override:
+      additional-prefix: "[sub$((index + 1))] "
+EOF
+done
 
+cat >> config.yaml <<EOF
 proxy-groups:
   # CHECKIN 是 select 组，脚本可通过 Clash API 手动切换出口节点（规避同 IP 限流）
   - name: CHECKIN
@@ -65,7 +87,11 @@ proxy-groups:
     proxies:
       - AUTO
     use:
-      - subscription
+EOF
+for provider_name in "${PROVIDER_NAMES[@]}"; do
+	printf '      - %s\n' "${provider_name}" >> config.yaml
+done
+cat >> config.yaml <<EOF
   - name: AUTO
     type: url-test
     url: "${PROXY_TEST_URL}"
@@ -73,11 +99,17 @@ proxy-groups:
     tolerance: 150
     lazy: false
     use:
-      - subscription
+EOF
+for provider_name in "${PROVIDER_NAMES[@]}"; do
+	printf '      - %s\n' "${provider_name}" >> config.yaml
+done
+cat >> config.yaml <<EOF
 
 rules:
   - MATCH,CHECKIN
 EOF
+chmod 600 config.yaml
+echo "[INFO] Configured ${#SUBSCRIPTION_URLS[@]} proxy subscription(s)"
 
 echo "[INFO] Starting mihomo on 127.0.0.1:${PROXY_PORT}..."
 nohup "${MIHOMO_BIN}" -d "${PROXY_DIR}" -f config.yaml > mihomo.log 2>&1 &
@@ -96,7 +128,8 @@ done
 
 if [[ "${READY}" != "true" ]]; then
 	echo "[FAILED] Proxy health check failed for ${PROXY_TEST_URL}"
-	tail -n 30 mihomo.log || true
+	# 订阅拉取错误可能带完整 URL，输出前把查询参数（尤其 token）统一脱敏。
+	tail -n 30 mihomo.log | sed -E 's#(https?://[^?[:space:]]+)\?[^[:space:]]+#\1?[REDACTED]#g' || true
 	if [[ -f mihomo.pid ]]; then
 		kill "$(cat mihomo.pid)" 2>/dev/null || true
 	fi

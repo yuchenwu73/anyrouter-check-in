@@ -58,9 +58,6 @@ AUTO_CHECKIN_RETRY_ATTEMPTS = int(os.getenv('CHECKIN_AUTO_RETRY_ATTEMPTS', '3'))
 AUTO_CHECKIN_RETRY_DELAY_S = float(os.getenv('CHECKIN_AUTO_RETRY_DELAY_S', '20'))
 # 取 WAF cookies 要用浏览器打开登录页，慢节点会超时，失败后换节点重试
 WAF_COOKIE_ATTEMPTS = int(os.getenv('CHECKIN_WAF_COOKIE_ATTEMPTS', '3'))
-# 平台明令禁止自动化刷量，而签到额度一天只发一次，多跑的请求纯属白增封号风险。
-# 所以确认到账后当天就不再碰这个账号；没到账时也限次数，留一次容错就够
-DAILY_ATTEMPT_LIMIT = int(os.getenv('CHECKIN_DAILY_ATTEMPT_LIMIT', '2'))
 # 两个平台刷新额度的时间不一样（agentrouter 零点、anyrouter 早 8 点），各自一到点就签的话
 # 一天会分两批到账、发两封通知。统一等到这个点之后再一起签，就只有一封汇总邮件。
 # 代价是 agentrouter 的额度晚 8 小时到手，反正当天领到就不会作废；设成 0 恢复原行为
@@ -133,11 +130,11 @@ def candidate_nodes_for(account_name: str, nodes: list[str]) -> list[str]:
 	return [home_node] + same_region[:2] + others
 
 
-def rotate_proxy_node(account_name: str) -> None:
+def rotate_proxy_node(account_name: str, probe_url: str = 'https://www.gstatic.com/generate_204') -> None:
 	"""把 CHECKIN 组切到这个账号该用的出口节点
 
 	不是「轮换到下一个」，而是「回到这个账号自己那个节点」：同一个号每天固定 IP，
-	只有节点不通时才顺延到同地区的下一个。
+	只有节点访问目标站失败时才顺延到同地区的下一个。
 	"""
 	if not PROXY_CONTROLLER:
 		return
@@ -163,13 +160,15 @@ def rotate_proxy_node(account_name: str) -> None:
 					return
 				try:
 					with httpx.Client(proxy=proxy_url, timeout=10) as probe:
-						resp = probe.get('https://www.gstatic.com/generate_204')
-					if resp.status_code in (200, 204):
-						print(f'[PROXY] {account_name}: exit node -> {target}')
-						return
-				except Exception:
-					pass
-				print(f'[PROXY] {account_name}: node "{target}" unreachable, trying next')
+						# 能收到任意 HTTP 响应就说明目标链路可达；WAF 的 403 也比超时/断连有效。
+						probe.get(probe_url)
+					print(f'[PROXY] {account_name}: exit node -> {target}')
+					return
+				except Exception as e:
+					print(
+						f'[PROXY] {account_name}: node "{target}" cannot reach target '
+						f'({type(e).__name__}), trying next'
+					)
 			# 全部探测失败则回退自动选择
 			client.put(f'{PROXY_CONTROLLER}/proxies/CHECKIN', json={'name': 'AUTO'})
 			print(f'[PROXY] {account_name}: all probed nodes failed, fallback to AUTO')
@@ -318,10 +317,6 @@ def skip_reason_today(record: dict, provider_config, now_hour: int) -> str | Non
 
 	if now_hour < CHECKIN_START_HOUR:
 		return f'等 {CHECKIN_START_HOUR} 点后和其它账号一起签，只发一封通知'
-
-	attempts = record.get('attempts', 0)
-	if attempts >= DAILY_ATTEMPT_LIMIT:
-		return f'当日已尝试 {attempts} 次，未到账也不再重试'
 
 	return None
 
@@ -612,7 +607,7 @@ async def prepare_cookies(
 				break
 			if attempt < WAF_COOKIE_ATTEMPTS:
 				print(f'[RETRY] {account_name}: WAF cookies attempt {attempt}/{WAF_COOKIE_ATTEMPTS} failed, switching node')
-				rotate_proxy_node(account_name)
+				rotate_proxy_node(account_name, provider_config.domain)
 		if not waf_cookies:
 			print(f'[FAILED] {account_name}: Unable to get WAF cookies')
 			return None
@@ -739,7 +734,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 
 	# 走代理的账号先轮换出口节点，避免多账号同 IP 连续请求被限流
 	if use_proxy:
-		rotate_proxy_node(account_name)
+		rotate_proxy_node(account_name, provider_config.domain)
 
 	# 邮箱密码优先
 	all_cookies = None
@@ -796,7 +791,7 @@ async def check_in_account(account: AccountConfig, account_index: int, app_confi
 		)
 		shutil.rmtree(settings.profile_dir, ignore_errors=True)
 		# 换出口 IP：runner 机房 IP 已被 WAF 标记，走机场节点重新登录
-		rotate_proxy_node(account_name)
+		rotate_proxy_node(account_name, provider_config.domain)
 		login_result = await login_with_credentials(
 			account_name,
 			provider_config,
@@ -955,7 +950,7 @@ async def main():
 		display_name = account.get_display_name(i)
 		record = daily_state['accounts'].setdefault(display_name, {})
 
-		# 风控：今天已到账、额度还没刷新、当日次数用满，三种情况都不再发请求
+		# 今天已到账或额度尚未刷新时不发请求；未到账则后续调度继续尝试
 		provider_config = app_config.get_provider(account.provider)
 		skip = skip_reason_today(record, provider_config, datetime.now().hour) if provider_config else None
 		if skip:
@@ -984,8 +979,6 @@ async def main():
 			account_check_in_details[account_key] = detail
 			continue
 
-		# 尝试次数在发请求前就记上，中途异常退出也不会让当天次数白涨
-		record['attempts'] = record.get('attempts', 0) + 1
 		try:
 			success, user_info_before, user_info_after = await check_in_account(account, i, app_config)
 			if success:

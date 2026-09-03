@@ -103,7 +103,10 @@ jobs:
 
     - name: 配置代理
       env:
-        PROXY_SUBSCRIPTION_URL: ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+        # 每条订阅各自存 Secret，GitHub 才能逐条脱敏；脚本接收时再合成多行列表。
+        PROXY_SUBSCRIPTION_URLS: |-
+          ${{ secrets.PROXY_SUBSCRIPTION_URL }}
+          ${{ secrets.PROXY_SUBSCRIPTION_URL_FALLBACK }}
         PROXY_TEST_URL: https://www.google.com/generate_204
         MIHOMO_VERSION: v1.19.27
         PROXY_REQUIRED: false

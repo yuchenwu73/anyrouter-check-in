@@ -119,3 +119,51 @@ def test_an_unknown_account_still_gets_a_node():
 
 	# 名册里没有的账号（比如单账号测试路径）也不能崩，退回哈希分配
 	assert candidate_nodes_for('stranger', NODES)[0] in NODES
+
+
+def test_rotation_probes_the_provider_and_skips_a_node_that_cannot_reach_it(monkeypatch):
+	bind('only-one')
+	monkeypatch.setattr(checkin, 'PROXY_CONTROLLER', 'http://controller.test')
+	monkeypatch.setenv('CHECKIN_PROXY_URL', 'http://proxy.test')
+	monkeypatch.setitem(checkin._proxy_attempt, 'only-one', 0)
+
+	candidates = candidate_nodes_for('only-one', NODES)
+	selected = {'node': None}
+	probed_urls = []
+
+	class Response:
+		def __init__(self, *, status_code=200, payload=None):
+			self.status_code = status_code
+			self._payload = payload
+
+		def json(self):
+			return self._payload
+
+	class Client:
+		def __init__(self, *, proxy=None, timeout=None):
+			self.proxy = proxy
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, *_args):
+			return None
+
+		def get(self, url):
+			if self.proxy:
+				probed_urls.append(url)
+				if selected['node'] == candidates[0]:
+					raise OSError('目标站连接被关闭')
+				return Response(status_code=403)
+			return Response(payload={'all': ['AUTO', *NODES]})
+
+		def put(self, _url, *, json):
+			selected['node'] = json['name']
+			return Response()
+
+	monkeypatch.setattr(checkin.httpx, 'Client', Client)
+
+	checkin.rotate_proxy_node('only-one', 'https://anyrouter.top')
+
+	assert selected['node'] == candidates[1]
+	assert probed_urls == ['https://anyrouter.top', 'https://anyrouter.top']

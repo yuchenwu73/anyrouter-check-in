@@ -247,17 +247,9 @@ def test_platform_reset_hour_wins_when_it_is_later(monkeypatch):
 	assert '10 点' in reason
 
 
-def test_skip_after_the_daily_attempt_budget_is_spent():
-	record = {'attempts': checkin.DAILY_ATTEMPT_LIMIT}
-
-	reason = skip_reason_today(record, make_provider(), now_hour=9)
-
-	assert reason is not None
-	assert '不再重试' in reason
-
-
-def test_attempts_below_the_budget_still_run():
-	record = {'attempts': checkin.DAILY_ATTEMPT_LIMIT - 1}
+def test_previous_failed_attempts_do_not_block_another_run():
+	# 兼容旧缓存里的 attempts 字段：只要今天尚未到账，后续调度就继续尝试
+	record = {'attempts': 99}
 
 	assert skip_reason_today(record, make_provider(), now_hour=9) is None
 
