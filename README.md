@@ -15,7 +15,7 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 - **通知只在有意义时发** — 上游的规则是「余额一变就通知」，而账号在使用中余额一直在动，一天能收到 4 封。改成只在**签到真正拿到额度**或**有账号签到失败**时推送，正常一天一封
 - **签到结果判定更可靠** — 上游只看单次运行的余额差，而额度入账可能滞后于签到请求，立刻复读会拿到旧值、把已到账误判成「无变化」。改动三处：签到后轮询复读余额（`CHECKIN_SETTLE_ATTEMPTS` / `CHECKIN_SETTLE_DELAY_S` 可调）；用 `checkin_state.json` 记住每个账号**今天**有没有真的到账，跨运行、跨天自动重置；通知按到账时机分开措辞（详见下条），而不是含糊的「今日已签到，无变化」。签到接口的响应体也会打进日志，便于确认平台对「今天已签过」到底返回什么
 - **通知措辞区分到账时机** — 额度可能由签到接口当场发放，也可能在浏览器登录动作时就已发放（邮箱密码账号即如此，读「签到前」余额时钱已进账，前后差值为 0）。两种都写成 `签到获得: +$25.00`（后者附「（08:57:24 观测到），登录时已到账」），一眼能看出本次运行挣到了钱；只有真正是今天早先运行拿到的才写「今日额度已到账 …，本次运行未再到账」
-- **每个账号绑定一个固定出口节点** — agentrouter 对同一 IP 的连续请求会限流（返回 WAF 页而非 JSON），多账号时排在后面的会稳定失败。配置了 mihomo 代理时，每个走代理的账号会拿到**自己专属的一个出口节点**（通过 Clash API，`CHECKIN_PROXY_CONTROLLER`）：各地区轮流填队列、账号按名字排序入座，所以前几个账号自然落在不同国家，且**任何两个账号都不会共用一个 IP**。代理脚本支持两个 Actions Secret（`PROXY_SUBSCRIPTION_URL` / `PROXY_SUBSCRIPTION_URL_FALLBACK`）合并节点池，并给节点加订阅前缀以避免重名。注意不是「每次换一个节点」——同一个账号的出口 IP 天天变动，本身就是平台判定账号异常的特征，所以优先回到固定节点；但会先用该账号的目标站实测链路，超时或断连才顺延，而且**先在同一个国家里换，整个国家都不通才跨国**。在 `accounts.json` 里调整账号顺序不会让任何账号换国家。地区池限定在港台新日韩（欧美/南美节点实测会 `Page.goto timeout`），订阅里「剩余流量：xx GB」这类信息占位节点和「5倍消耗」这类高倍率节点都排除在外。读取失败时仍冷却 20 秒重试（`CHECKIN_AUTO_RETRY_ATTEMPTS` / `CHECKIN_AUTO_RETRY_DELAY_S` 可调）
+- **每个账号绑定一个固定出口节点** — agentrouter 对同一 IP 的连续请求会限流（返回 WAF 页而非 JSON），多账号时排在后面的会稳定失败。配置了 mihomo 代理时，每个走代理的账号会拿到**自己专属的一个出口节点**（通过 Clash API，`CHECKIN_PROXY_CONTROLLER`）：各地区轮流填队列、账号按名字排序入座，所以前几个账号自然落在不同国家，且**任何两个账号都不会共用一个 IP**。workflow 支持四个 Actions Secret 合并节点池，代理脚本本身支持任意数量的逐行订阅，并给节点加订阅前缀以避免重名。注意不是「每次换一个节点」——同一个账号的出口 IP 天天变动，本身就是平台判定账号异常的特征，所以优先回到固定节点；但会先用该账号的目标站实测链路，超时或断连才顺延，而且**先在同一个国家里换，整个国家都不通才跨国**。在 `accounts.json` 里调整账号顺序不会让任何账号换国家。地区池限定在港台新日韩（欧美/南美节点实测会 `Page.goto timeout`），订阅里流量/到期提示、客服信息和高倍率节点都排除在外。读取失败时仍冷却 20 秒重试（`CHECKIN_AUTO_RETRY_ATTEMPTS` / `CHECKIN_AUTO_RETRY_DELAY_S` 可调）
 - **WAF 403 自动换 IP 重登** — 阿里云 WAF 会按「账号 + 出口 IP」标记，被盯上后即使全新登录也过不去（实测清 profile 重登仍 403）。邮箱密码账号遇到 403 时会清掉缓存 profile、顺延到同地区的下一个出口节点、改走代理重新登录并重试一次；平时仍走直连，不影响其它账号。已知长期被拉黑的账号可以在配置里加 `"use_proxy": true`，一开始就走代理，不用每次先撞一次 403
 - **账号密钥改名** — 本 fork 的 workflow 从 Secret `CHECKIN_ACCOUNTS` 读账号列表（因为里面不只有 AnyRouter，还有 AgentRouter 账号）。下文上游文档里写的 `ANYROUTER_ACCOUNTS` 在本 fork 不生效，配置格式不变
 - **账号配置模板** — 新增 `config/` 目录，`./config/build.sh` 一条命令完成格式校验、压成单行、复制到剪贴板，不用手工压缩 JSON，漏个逗号也能当场发现（见 [config/README.md](config/README.md)）
@@ -308,16 +308,20 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 
 内置的 `agentrouter` 默认 `use_proxy: true`。如果你的运行环境访问该平台不稳定，可以在 GitHub Actions 中配置 mihomo 订阅代理。
 
-在仓库 Settings -> Environments -> production -> Environment secrets 中添加：
+在仓库 Settings -> Secrets and variables -> Actions -> Repository secrets 中添加：
 
 - `PROXY_SUBSCRIPTION_URL`：第一条 Clash/Mihomo 订阅链接。
 - `PROXY_SUBSCRIPTION_URL_FALLBACK`：可选的第二条订阅链接；节点会与第一条合并，并自动加订阅前缀避免重名。
+- `PROXY_SUBSCRIPTION_URL_3`：可选的第三条订阅链接。
+- `PROXY_SUBSCRIPTION_URL_4`：可选的第四条订阅链接。
 
 设置后，workflow 会运行 `scripts/setup_mihomo_proxy.sh`，启动本地代理并写入 `CHECKIN_PROXY_URL`、`CHECKIN_PROXY_CONTROLLER`。
 
 `CHECKIN_PROXY_CONTROLLER` 指向 mihomo 的 Clash API（默认 `http://127.0.0.1:9091`，端口可用 `PROXY_CONTROLLER_PORT` 改）。设置后，每个走代理的账号会绑定订阅里的**一个固定出口节点**——各地区轮流填队列、账号按名字排序入座，所以账号之间互不共用 IP，而单个账号每天又落在同一个节点上（IP 稳定比 IP 分散更重要，同一个号频繁换出口本身就可疑）。选中节点后会直接探测该账号的平台域名；目标站超时或断连时先在同地区顺延，整个地区都不通才跨地区，全部探测失败则回退到自动选优（`AUTO` 组）。不设置则所有账号共用同一出口。
 
-参与分配的节点会过滤两类：「剩余流量：xx GB」这种机场信息占位节点（连不通），以及「5倍消耗」这种高倍率节点（会成倍烧套餐流量）。主节点只从低延迟地区里挑（港、台、新、日、韩），其余地区仅在这些全都不通时作兜底——实测欧美和南美节点虽然能通过连通性探测，但慢到浏览器登录 30 秒超时。
+参与分配的节点会过滤流量、到期、客服等机场说明项，以及「5倍消耗」这种高倍率节点（会成倍烧套餐流量）。主节点只从低延迟地区里挑（港、台、新、日、韩），其余地区仅在这些全都不通时作兜底——实测欧美和南美节点虽然能通过连通性探测，但慢到浏览器登录 30 秒超时。
+
+本地可以把订阅逐行写入仓库根目录的 `.proxy-subscriptions`。该文件已加入 `.gitignore`，应保持 `600` 权限；代理脚本在未传环境变量时会自动读取它。
 
 本地运行时也可以直接使用已有代理：
 

@@ -31,6 +31,15 @@ def bind(*names):
 def test_region_is_parsed_from_the_node_name():
 	assert node_region('🇭🇰|香港-中转 01') == '香港'
 	assert node_region('🇯🇵|日本星链家宽-IEPL 02') == '日本星链家宽'
+	assert node_region('[sub2] 🇭🇰 香港01') == '香港'
+	assert node_region('[sub3] 🇹🇼 台湾家宽 01') == '台湾'
+
+
+def test_subscription_metadata_nodes_are_excluded():
+	metadata_nodes = ['[sub2] 支持AI:新美台日港', '[sub2] 邮箱客服example@example.com']
+
+	for node in metadata_nodes:
+		assert any(keyword in node for keyword in checkin.PROXY_SKIP_KEYWORDS)
 
 
 def test_each_account_gets_its_own_exit_node():

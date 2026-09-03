@@ -107,6 +107,8 @@ jobs:
         PROXY_SUBSCRIPTION_URLS: |-
           ${{ secrets.PROXY_SUBSCRIPTION_URL }}
           ${{ secrets.PROXY_SUBSCRIPTION_URL_FALLBACK }}
+          ${{ secrets.PROXY_SUBSCRIPTION_URL_3 }}
+          ${{ secrets.PROXY_SUBSCRIPTION_URL_4 }}
         PROXY_TEST_URL: https://www.google.com/generate_204
         MIHOMO_VERSION: v1.19.27
         PROXY_REQUIRED: false

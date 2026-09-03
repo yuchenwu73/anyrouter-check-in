@@ -3,13 +3,23 @@
 # 环境变量:
 #   PROXY_SUBSCRIPTION_URLS 多个订阅链接，每行一个（优先）
 #   PROXY_SUBSCRIPTION_URL  单个订阅链接（兼容旧配置）
+#   PROXY_SUBSCRIPTION_FILE 本地订阅清单，默认 .proxy-subscriptions
 #   PROXY_TEST_URL          探测目标，默认 https://www.google.com/generate_204
 #   PROXY_REQUIRED          true 时探测失败则退出 1
 #   PROXY_PORT              本地 mixed-port，默认 7890
 
 set -euo pipefail
 
-SUBSCRIPTION_INPUT="${PROXY_SUBSCRIPTION_URLS:-${PROXY_SUBSCRIPTION_URL:-}}"
+SUBSCRIPTION_FILE="${PROXY_SUBSCRIPTION_FILE:-.proxy-subscriptions}"
+if [[ -n "${PROXY_SUBSCRIPTION_URLS:-}" ]]; then
+	SUBSCRIPTION_INPUT="${PROXY_SUBSCRIPTION_URLS}"
+elif [[ -n "${PROXY_SUBSCRIPTION_URL:-}" ]]; then
+	SUBSCRIPTION_INPUT="${PROXY_SUBSCRIPTION_URL}"
+elif [[ -f "${SUBSCRIPTION_FILE}" ]]; then
+	SUBSCRIPTION_INPUT="$(< "${SUBSCRIPTION_FILE}")"
+else
+	SUBSCRIPTION_INPUT=""
+fi
 SUBSCRIPTION_URLS=()
 while IFS= read -r subscription_url; do
 	subscription_url="${subscription_url%$'\r'}"
@@ -26,7 +36,7 @@ fi
 PROXY_DIR="${RUNNER_TEMP:-/tmp}/checkin-proxy"
 PROXY_PORT="${PROXY_PORT:-7890}"
 PROXY_TEST_URL="${PROXY_TEST_URL:-https://www.google.com/generate_204}"
-MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.0}"
+MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.27}"
 PROXY_REQUIRED="${PROXY_REQUIRED:-false}"
 
 mkdir -p "${PROXY_DIR}"
@@ -140,6 +150,17 @@ if [[ "${READY}" != "true" ]]; then
 fi
 
 echo "[SUCCESS] Proxy is ready: ${PROXY_URL}"
+if command -v jq >/dev/null 2>&1; then
+	provider_status="$(curl -fsS "http://127.0.0.1:${PROXY_CONTROLLER_PORT}/providers/proxies" 2>/dev/null || true)"
+	for provider_name in "${PROVIDER_NAMES[@]}"; do
+		node_count="$(jq -r --arg name "${provider_name}" '.providers[$name].proxies | length // 0' <<< "${provider_status}" 2>/dev/null || printf '0')"
+		if (( node_count > 0 )); then
+			echo "[INFO] Proxy provider ${provider_name}: ${node_count} node(s) loaded"
+		else
+			echo "[WARN] Proxy provider ${provider_name}: no nodes loaded"
+		fi
+	done
+fi
 echo "[INFO] Proxy is scoped to CHECKIN_PROXY_URL (browser/python only, not global HTTP_PROXY)"
 if [[ -n "${GITHUB_ENV:-}" ]]; then
 	echo "CHECKIN_PROXY_URL=${PROXY_URL}" >> "${GITHUB_ENV}"

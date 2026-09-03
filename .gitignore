@@ -1,5 +1,6 @@
 .claude
 .env
+.proxy-subscriptions
 .venv
 __pycache__
 .pytest_cache

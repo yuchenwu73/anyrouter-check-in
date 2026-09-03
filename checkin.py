@@ -68,9 +68,20 @@ SESSION_COOKIE_WARN_DAYS = int(os.getenv('CHECKIN_COOKIE_WARN_DAYS', '5'))
 
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
-# 机场订阅里混着「剩余流量：17 GB」这类信息占位节点，多半连不通；「5倍消耗」这类
-# 高倍率节点会成倍烧套餐流量，签到用不上。两种都不参与轮换
-PROXY_SKIP_KEYWORDS = ('剩余流量', '套餐到期', '距离下次重置', '官网', '过期时间', '倍消耗', '倍率')
+# 机场订阅里混着流量/到期/客服等说明项，多半连不通；高倍率节点还会成倍烧套餐流量。
+# 这些都不参与轮换
+PROXY_SKIP_KEYWORDS = (
+	'剩余流量',
+	'套餐到期',
+	'距离下次重置',
+	'官网',
+	'过期时间',
+	'倍消耗',
+	'倍率',
+	'支持AI',
+	'客服',
+	'邮箱',
+)
 # 每个账号锁定一个地区，只从这几个里挑：延迟低，浏览器登录不容易超时
 #（实测欧美/南美节点会 Page.goto timeout，冷门地区只留作全都不通时的兜底）
 PROXY_PREFERRED_REGIONS = ('香港', '台湾', '新加坡', '日本', '韩国')
@@ -82,7 +93,12 @@ _proxy_attempt: dict[str, int] = {}
 
 def node_region(node: str) -> str:
 	"""从节点名里取地区，'🇭🇰|香港-中转 01' -> '香港'"""
-	tail = node.split('|')[-1].strip()
+	cleaned = re.sub(r'^\[sub\d+\]\s*', '', node)
+	if '|' not in cleaned:
+		for preferred in PROXY_PREFERRED_REGIONS:
+			if preferred in cleaned:
+				return preferred
+	tail = cleaned.split('|')[-1].strip()
 	return re.split(r'[-\s]', tail, maxsplit=1)[0] or node
 
 
