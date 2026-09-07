@@ -1,4 +1,4 @@
-# Any Router 多账号自动签到
+# AnyRouter + AgentRouter 多账号自动签到
 
 [![GitHub Actions](https://github.com/millylee/anyrouter-check-in/workflows/PR%20Quality%20Checks/badge.svg)](https://github.com/millylee/anyrouter-check-in/actions)
 [![codecov](https://codecov.io/gh/millylee/anyrouter-check-in/branch/main/graph/badge.svg)](https://codecov.io/gh/millylee/anyrouter-check-in)
@@ -135,14 +135,14 @@ Fork 自 [millylee/anyrouter-check-in](https://github.com/millylee/anyrouter-che
 
 1. 在你的仓库中，点击 "Actions" 选项卡
 2. 如果提示启用 Actions，请点击启用
-3. 找到 "AnyRouter 自动签到" workflow
+3. 找到 "AnyRouter + AgentRouter 自动签到" workflow
 4. 点击 "Enable workflow"
 
 ### 6. 测试运行
 
 你可以手动触发一次签到来测试：
 
-1. 在 "Actions" 选项卡中，点击 "AnyRouter 自动签到"
+1. 在 "Actions" 选项卡中，点击 "AnyRouter + AgentRouter 自动签到"
 2. 点击 "Run workflow" 按钮
 3. 确认运行
 

@@ -1,4 +1,4 @@
-name: AnyRouter 自动签到
+name: AnyRouter + AgentRouter 自动签到
 on:
   schedule:
     # 北京时间 8:25 / 10:25 / 12:25 / 20:25（实测 GitHub 还要再延迟 30~60 分钟才真正开跑）。
