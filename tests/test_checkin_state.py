@@ -15,8 +15,9 @@ from checkin import (
 	remember_balance,
 	save_daily_state,
 	skip_reason_today,
+	summarize_provider_balances,
 )
-from utils.config import ProviderConfig
+from utils.config import AccountConfig, ProviderConfig
 
 
 def make_detail(reward=0.0, usage=0.0):
@@ -339,3 +340,65 @@ def test_notification_still_lists_a_skipped_account_without_a_balance_readout():
 	assert 'AgentRouter-L站小号' in message
 	assert '今日额度已到账 +$25.00（08:57:24 观测到），当日不再重复登录' in message
 	assert '余额:' not in message
+
+
+def make_account(provider, name):
+	"""构造一个只关心「属于哪个平台、叫什么名字」的账号"""
+	return AccountConfig(cookies=None, api_user='1', provider=provider, name=name)
+
+
+def test_balance_overview_totals_each_platform_separately():
+	accounts = [
+		make_account('anyrouter', 'AnyRouter-zjwei'),
+		make_account('anyrouter', 'AnyRouter-小号'),
+		make_account('agentrouter', 'AgentRouter-L站大号'),
+	]
+	current = {
+		'account_1': {'quota': 700.37, 'used': 2945.38},
+		'account_2': {'quota': 100.0, 'used': 0.0},
+		'account_3': {'quota': 906.04, 'used': 38.96},
+	}
+
+	lines = summarize_provider_balances(accounts, current, {'accounts': {}})
+
+	assert '  anyrouter: $800.37（2 个账号）' in lines
+	assert '  agentrouter: $906.04（1 个账号）' in lines
+	assert '  合计: $1706.41' in lines
+
+
+def test_balance_overview_falls_back_to_todays_recorded_balance():
+	# 跳过或失败的账号本次没有实时读数，用状态文件里当天记下的余额顶上
+	accounts = [make_account('agentrouter', 'AgentRouter-L站大号')]
+	state = {'accounts': {'AgentRouter-L站大号': {'quota': 906.04, 'used': 38.96}}}
+
+	lines = summarize_provider_balances(accounts, {}, state)
+
+	assert '  agentrouter: $906.04（1 个账号）' in lines
+
+
+def test_balance_overview_flags_accounts_without_any_reading():
+	# 读不到余额的账号不能按 $0 计入，否则平台总额会少报
+	accounts = [
+		make_account('anyrouter', 'AnyRouter-zjwei'),
+		make_account('anyrouter', 'AnyRouter-新号'),
+	]
+	current = {'account_1': {'quota': 700.37, 'used': 2945.38}}
+
+	lines = summarize_provider_balances(accounts, current, {'accounts': {}})
+
+	assert '  anyrouter: $700.37（1 个账号），另有 1 个账号未读到余额' in lines
+
+
+def test_balance_overview_skips_the_grand_total_for_a_single_platform():
+	accounts = [make_account('anyrouter', 'AnyRouter-zjwei')]
+	current = {'account_1': {'quota': 700.37, 'used': 2945.38}}
+
+	lines = summarize_provider_balances(accounts, current, {'accounts': {}})
+
+	assert not any('合计' in line for line in lines)
+
+
+def test_balance_overview_is_omitted_when_nothing_was_read():
+	accounts = [make_account('anyrouter', 'AnyRouter-zjwei')]
+
+	assert summarize_provider_balances(accounts, {}, {'accounts': {}}) == []

@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      test_notify:
+        description: 只发一封测试通知（不执行签到）
+        required: false
+        default: false
+        type: boolean
 
 # 同一时间只允许一次签到在跑：手动触发和定时任务撞上的话，同一个账号会被登录两次，
 # 白白多一条自动化痕迹，状态文件也会互相覆盖。排队等待而不是取消，免得跑到一半被打断
@@ -22,6 +27,8 @@ concurrency:
 
 jobs:
   checkin:
+    # 勾了「只发测试通知」时整条签到链路都不跑，免得为看一眼排版白登录一遍账号
+    if: github.event.inputs.test_notify != 'true'
     runs-on: ubuntu-latest
     environment: production
     # 兜底：整个任务最多跑 40 分钟。默认上限是 6 小时，某个步骤挂死会白烧一次运行且不发通知
@@ -168,3 +175,61 @@ jobs:
           echo "调试截图已上传为 artifact: checkin-screenshots-${{ github.run_id }}"
           ls -la checkin_screenshots/
         fi
+
+  # 手动触发用：只发一封通知看排版，不登录账号、不动状态缓存
+  test-notify:
+    if: github.event.inputs.test_notify == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 10
+    env:
+      TZ: Asia/Shanghai
+      PYTHONIOENCODING: utf-8
+      PYTHONUNBUFFERED: 1
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+      with:
+        version: "latest"
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: 安装依赖
+      run: uv sync --frozen
+
+    # 只读恢复：用 cache/restore 而不是 cache，免得测试跑完把缓存回写、盖掉签到留下的余额记录
+    - name: 恢复余额历史缓存
+      uses: actions/cache/restore@v5
+      with:
+        path: |
+          balance_hash.txt
+          checkin_state.json
+        key: balance-hash-${{ github.ref_name }}-${{ github.run_id }}
+        restore-keys: |
+          balance-hash-${{ github.ref_name }}-
+          balance-hash-
+
+    - name: 发送测试通知
+      env:
+        ANYROUTER_ACCOUNTS: ${{ secrets.CHECKIN_ACCOUNTS }}
+        DINGDING_WEBHOOK: ${{ secrets.DINGDING_WEBHOOK }}
+        EMAIL_USER: ${{ secrets.EMAIL_USER }}
+        EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+        CUSTOM_SMTP_SERVER: ${{ secrets.CUSTOM_SMTP_SERVER }}
+        PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        SERVERPUSHKEY: ${{ secrets.SERVERPUSHKEY }}
+        FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+        WEIXIN_WEBHOOK: ${{ secrets.WEIXIN_WEBHOOK }}
+        TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        GOTIFY_URL: ${{ secrets.GOTIFY_URL }}
+        GOTIFY_TOKEN: ${{ secrets.GOTIFY_TOKEN }}
+        GOTIFY_PRIORITY: ${{ secrets.GOTIFY_PRIORITY }}
+        BARK_KEY: ${{ secrets.BARK_KEY }}
+        BARK_SERVER: ${{ secrets.BARK_SERVER }}
+      run: uv run python scripts/send_test_notification.py

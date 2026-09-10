@@ -674,6 +674,46 @@ def execute_check_in(client, account_name: str, provider_config, headers: dict):
 		return False
 
 
+def summarize_provider_balances(accounts: list, current_balances: dict, daily_state: dict) -> list[str]:
+	"""按平台汇总当前余额，返回放在通知最前面的总览行
+
+	余额优先用本次运行读到的实时值；本次没发请求的账号（跳过/失败）回落到状态文件里
+	当天记下的读数。两处都没有就单独计数，免得把「读不到」当成 $0 少报总额。
+	"""
+	totals: dict[str, dict] = {}
+
+	for i, account in enumerate(accounts):
+		bucket = totals.setdefault(account.provider, {'quota': 0.0, 'counted': 0, 'missing': 0})
+		reading = current_balances.get(f'account_{i + 1}')
+		if reading is None:
+			record = daily_state.get('accounts', {}).get(account.get_display_name(i), {})
+			reading = record if 'quota' in record else None
+
+		if reading is None:
+			bucket['missing'] += 1
+			continue
+
+		bucket['quota'] += float(reading['quota'])
+		bucket['counted'] += 1
+
+	# 一个账号的余额都没读到时不发总览，全 $0 的表格比没有更容易误导
+	if not any(bucket['counted'] for bucket in totals.values()):
+		return []
+
+	lines = ['[BALANCE] 各平台当前额度']
+	for provider in sorted(totals):
+		bucket = totals[provider]
+		line = f'  {provider}: ${bucket["quota"]:.2f}（{bucket["counted"]} 个账号）'
+		if bucket['missing']:
+			line += f'，另有 {bucket["missing"]} 个账号未读到余额'
+		lines.append(line)
+
+	if len(totals) > 1:
+		lines.append(f'  合计: ${sum(bucket["quota"] for bucket in totals.values()):.2f}')
+
+	return lines
+
+
 def format_check_in_notification(detail: dict, today_record: dict | None = None, credited_this_run: bool = False) -> str:
 	"""格式化签到通知消息"""
 	if detail.get('skipped'):
@@ -1121,7 +1161,13 @@ async def main():
 
 		time_info = f'[TIME] Execution time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}'
 
-		notify_content = '\n\n'.join([time_info, '\n'.join(notification_content), '\n'.join(summary)])
+		blocks = [time_info, '\n'.join(notification_content), '\n'.join(summary)]
+		# 各平台额度总览放在最前面：先看到两边各有多少钱，再往下翻账号明细
+		balance_overview = summarize_provider_balances(accounts, current_balances, daily_state)
+		if balance_overview:
+			blocks.insert(0, '\n'.join(balance_overview))
+
+		notify_content = '\n\n'.join(blocks)
 		screenshot_paths = take_pending_screenshots() if is_debug_enabled() else []
 		if screenshot_paths:
 			github_run_id = os.getenv('GITHUB_RUN_ID', '').strip()
