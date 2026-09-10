@@ -260,9 +260,10 @@ def load_daily_state() -> dict:
 					credited = sum(1 for r in state['accounts'].values() if r.get('reward', 0) > 0.01)
 					print(f'[STATE] Daily baseline loaded: {credited} account(s) credited today')
 				else:
-					# 跨天只清零当日奖励和尝试次数，余额基线要留着，否则认不出间隙里到账的额度
+					# 跨天只清零当日奖励和尝试次数，余额基线要留着，否则认不出间隙里到账的额度。
+					# quota/used 连日期戳一起留，靠 balance_read_today 按日期判定它已经过期
 					state['accounts'] = {
-						name: {k: rec[k] for k in ('max_total', 'quota', 'used') if k in rec}
+						name: {k: rec[k] for k in ('max_total', 'quota', 'used', 'balance_at') if k in rec}
 						for name, rec in saved['accounts'].items()
 						if isinstance(rec, dict) and 'max_total' in rec
 					}
@@ -343,9 +344,23 @@ def skip_reason_today(record: dict, provider_config, now_hour: int) -> str | Non
 
 
 def remember_balance(record: dict, quota: float, used: float) -> None:
-	"""记下最近一次读到的余额，供当天后续跳过时填通知"""
+	"""记下最近一次读到的余额，供当天后续跳过时填通知
+
+	带上日期戳：跨天时 load_daily_state 会保留 quota/used（认间隙到账要用），
+	不标日期的话，今天登录失败的账号会把昨天的读数当成当前余额算进平台总额。
+	"""
 	record['quota'] = round(quota, 2)
 	record['used'] = round(used, 2)
+	record['balance_at'] = today_key()
+
+
+def balance_read_today(record: dict) -> dict | None:
+	"""取当天记下的余额读数，不是当天的（或没有日期戳的旧缓存）返回 None"""
+	if 'quota' not in record or 'used' not in record:
+		return None
+	if record.get('balance_at') != today_key():
+		return None
+	return record
 
 
 def parse_cookies(cookies_data):
@@ -692,7 +707,7 @@ def summarize_provider_balances(accounts: list, current_balances: dict, daily_st
 		reading = current_balances.get(f'account_{i + 1}')
 		if reading is None:
 			record = daily_state.get('accounts', {}).get(account.get_display_name(i), {})
-			reading = record if 'quota' in record else None
+			reading = balance_read_today(record)
 
 		if reading is None:
 			bucket['missing'] += 1
@@ -1028,7 +1043,7 @@ async def main():
 				'success': True,
 				'skipped': skip,
 			}
-			if 'quota' in record and 'used' in record:
+			if balance_read_today(record):
 				current_balances[account_key] = {'quota': record['quota'], 'used': record['used']}
 				detail.update(
 					{

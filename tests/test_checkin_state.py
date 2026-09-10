@@ -7,6 +7,7 @@ sys.path.insert(0, str(project_root))
 
 import checkin
 from checkin import (
+	balance_read_today,
 	format_check_in_notification,
 	generate_balance_hash,
 	load_daily_state,
@@ -272,6 +273,7 @@ def test_new_day_keeps_balance_readout_but_clears_attempts(tmp_path, monkeypatch
 				'max_total': 3645.75,
 				'quota': 700.37,
 				'used': 2945.38,
+				'balance_at': '2000-01-01',
 				'attempts': 2,
 			}
 		},
@@ -281,7 +283,14 @@ def test_new_day_keeps_balance_readout_but_clears_attempts(tmp_path, monkeypatch
 	record = load_daily_state()['accounts']['AnyRouter-zjwei']
 
 	# 余额留着给通知用，当日奖励和尝试次数必须清零，否则新的一天不会再尝试
-	assert record == {'max_total': 3645.75, 'quota': 700.37, 'used': 2945.38}
+	assert record == {
+		'max_total': 3645.75,
+		'quota': 700.37,
+		'used': 2945.38,
+		'balance_at': '2000-01-01',
+	}
+	# 日期戳留着，才判定得出这个读数不是今天的
+	assert balance_read_today(record) is None
 
 
 def test_remember_balance_rounds_to_cents():
@@ -289,7 +298,7 @@ def test_remember_balance_rounds_to_cents():
 
 	remember_balance(record, 700.3712, 2945.3849)
 
-	assert record == {'quota': 700.37, 'used': 2945.38}
+	assert record == {'quota': 700.37, 'used': 2945.38, 'balance_at': checkin.today_key()}
 
 
 def make_skipped_detail(reason='今日额度已到账'):
@@ -369,7 +378,11 @@ def test_balance_overview_totals_each_platform_separately():
 def test_balance_overview_falls_back_to_todays_recorded_balance():
 	# 跳过或失败的账号本次没有实时读数，用状态文件里当天记下的余额顶上
 	accounts = [make_account('agentrouter', 'AgentRouter-L站大号')]
-	state = {'accounts': {'AgentRouter-L站大号': {'quota': 906.04, 'used': 38.96}}}
+	state = {
+		'accounts': {
+			'AgentRouter-L站大号': {'quota': 906.04, 'used': 38.96, 'balance_at': checkin.today_key()},
+		}
+	}
 
 	lines = summarize_provider_balances(accounts, {}, state)
 
@@ -402,3 +415,30 @@ def test_balance_overview_is_omitted_when_nothing_was_read():
 	accounts = [make_account('anyrouter', 'AnyRouter-zjwei')]
 
 	assert summarize_provider_balances(accounts, {}, {'accounts': {}}) == []
+
+
+def test_balance_overview_ignores_a_reading_from_a_previous_day():
+	# 跨天时状态文件会留着旧的 quota/used（认间隙到账要用），但它不是当前余额：
+	# 今天登录失败的账号若按旧读数计入，平台总额会静默算错
+	accounts = [make_account('anyrouter', 'AnyRouter-zjwei'), make_account('anyrouter', 'AnyRouter-小号')]
+	current = {'account_2': {'quota': 125.0, 'used': 18.42}}
+	state = {'accounts': {'AnyRouter-zjwei': {'quota': 700.37, 'used': 2945.38, 'balance_at': '2000-01-01'}}}
+
+	lines = summarize_provider_balances(accounts, current, state)
+
+	assert '  AnyRouter: $125.00（1 个账号），另有 1 个账号未读到余额' in lines
+
+
+def test_balance_overview_ignores_a_reading_without_a_date_stamp():
+	# 加日期戳之前写下的缓存没有 balance_at，同样不能当成当前余额
+	accounts = [make_account('anyrouter', 'AnyRouter-zjwei')]
+	state = {'accounts': {'AnyRouter-zjwei': {'quota': 700.37, 'used': 2945.38}}}
+
+	assert summarize_provider_balances(accounts, {}, state) == []
+
+
+def test_balance_read_today_accepts_a_reading_taken_today():
+	record = {}
+	remember_balance(record, 700.37, 2945.38)
+
+	assert balance_read_today(record) == record
