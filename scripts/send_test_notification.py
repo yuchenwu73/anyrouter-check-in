@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from checkin import load_daily_state, summarize_provider_balances  # noqa: E402
+from checkin import NOTIFY_TITLE, load_daily_state, summarize_provider_balances  # noqa: E402
 from utils.config import load_accounts_config  # noqa: E402
 from utils.notify import notify  # noqa: E402
 
@@ -36,7 +36,7 @@ def main():
 
 	content = '\n\n'.join(blocks)
 	print(content)
-	notify.push_message('AnyRouter Check-in 测试通知', content, msg_type='text')
+	notify.push_message(f'{NOTIFY_TITLE}（测试通知）', content, msg_type='text')
 
 
 if __name__ == '__main__':

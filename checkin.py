@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AnyRouter.top 自动签到脚本
+AnyRouter + AgentRouter 自动签到脚本
 """
 
 import asyncio
@@ -47,6 +47,11 @@ load_dotenv()
 BALANCE_HASH_FILE = 'balance_hash.txt'
 # 今日到账基线：跨运行记住每个账号今天有没有真的拿到额度
 CHECK_IN_STATE_FILE = 'checkin_state.json'
+
+# 两个平台的账号攒在一封通知里，标题和平台名都别只写 AnyRouter 一个。
+# provider 键是小写的配置键，展示时换成平台官方写法；自定义 provider 没有映射就原样输出
+NOTIFY_TITLE = 'AnyRouter + AgentRouter Check-in Alert'
+PROVIDER_DISPLAY_NAMES = {'anyrouter': 'AnyRouter', 'agentrouter': 'AgentRouter'}
 
 # 签到接口响应体日志截断长度
 CHECK_IN_BODY_LOG_LIMIT = int(os.getenv('CHECKIN_BODY_LOG_LIMIT', '300'))
@@ -700,10 +705,11 @@ def summarize_provider_balances(accounts: list, current_balances: dict, daily_st
 	if not any(bucket['counted'] for bucket in totals.values()):
 		return []
 
+	# 不排序：totals 按账号配置顺序建起来，和下面的账号明细排法保持一致
 	lines = ['[BALANCE] 各平台当前额度']
-	for provider in sorted(totals):
-		bucket = totals[provider]
-		line = f'  {provider}: ${bucket["quota"]:.2f}（{bucket["counted"]} 个账号）'
+	for provider, bucket in totals.items():
+		display = PROVIDER_DISPLAY_NAMES.get(provider, provider)
+		line = f'  {display}: ${bucket["quota"]:.2f}（{bucket["counted"]} 个账号）'
 		if bucket['missing']:
 			line += f'，另有 {bucket["missing"]} 个账号未读到余额'
 		lines.append(line)
@@ -967,7 +973,7 @@ async def main():
 	else:
 		print('[INFO] Debug mode disabled (set DEBUG_MODE=true to enable screenshots and verbose logs)')
 
-	print('[SYSTEM] AnyRouter.top multi-account auto check-in script started')
+	print('[SYSTEM] AnyRouter + AgentRouter multi-account auto check-in script started')
 	print(f'[TIME] Execution time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
 
 	app_config = AppConfig.load_from_env()
@@ -980,7 +986,7 @@ async def main():
 	if not accounts:
 		error_msg = '[FAILED] Unable to load account configuration, program exits'
 		print(error_msg)
-		notify.push_message('AnyRouter Check-in Alert', error_msg, msg_type='text')
+		notify.push_message(NOTIFY_TITLE, error_msg, msg_type='text')
 		sys.exit(1)
 
 	print(f'[INFO] Found {len(accounts)} account configurations')
@@ -1181,7 +1187,7 @@ async def main():
 			notify_content += f'\n\n{screenshot_hint}'
 
 		print(notify_content)
-		notify.push_message('AnyRouter Check-in Alert', notify_content, msg_type='text')
+		notify.push_message(NOTIFY_TITLE, notify_content, msg_type='text')
 		print('[NOTIFY] Notification sent due to failures or balance changes')
 	else:
 		print('[INFO] All accounts successful and no balance changes detected, notification skipped')

@@ -361,8 +361,8 @@ def test_balance_overview_totals_each_platform_separately():
 
 	lines = summarize_provider_balances(accounts, current, {'accounts': {}})
 
-	assert '  anyrouter: $800.37（2 个账号）' in lines
-	assert '  agentrouter: $906.04（1 个账号）' in lines
+	assert '  AnyRouter: $800.37（2 个账号）' in lines
+	assert '  AgentRouter: $906.04（1 个账号）' in lines
 	assert '  合计: $1706.41' in lines
 
 
@@ -373,7 +373,7 @@ def test_balance_overview_falls_back_to_todays_recorded_balance():
 
 	lines = summarize_provider_balances(accounts, {}, state)
 
-	assert '  agentrouter: $906.04（1 个账号）' in lines
+	assert '  AgentRouter: $906.04（1 个账号）' in lines
 
 
 def test_balance_overview_flags_accounts_without_any_reading():
@@ -386,7 +386,7 @@ def test_balance_overview_flags_accounts_without_any_reading():
 
 	lines = summarize_provider_balances(accounts, current, {'accounts': {}})
 
-	assert '  anyrouter: $700.37（1 个账号），另有 1 个账号未读到余额' in lines
+	assert '  AnyRouter: $700.37（1 个账号），另有 1 个账号未读到余额' in lines
 
 
 def test_balance_overview_skips_the_grand_total_for_a_single_platform():

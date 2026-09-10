@@ -66,7 +66,7 @@ class NotificationKit:
 		# MIMEText 需要 'plain' 或 'html'，而不是 'text'
 		mime_subtype = 'plain' if msg_type == 'text' else 'html'
 		msg = MIMEText(content, mime_subtype, 'utf-8')
-		msg['From'] = f'AnyRouter Assistant <{sender}>'
+		msg['From'] = f'AnyRouter + AgentRouter Assistant <{sender}>'
 		msg['To'] = self.email_to
 		msg['Subject'] = title
 
@@ -152,7 +152,7 @@ class NotificationKit:
 			'title': title,
 			'body': content,
 			'icon': 'https://anyrouter.top/favicon.ico',  # 可选：尝试使用 AnyRouter 图标
-			'group': 'AnyRouter',
+			'group': 'Router Check-in',  # 两个平台共用一个分组，别只挂 AnyRouter 的名字
 		}
 
 		self._post_json('Bark', url, data)
