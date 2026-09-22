@@ -5,7 +5,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 import checkin
-from checkin import candidate_nodes_for, node_region
+from checkin import candidate_nodes_for, node_region, node_sub
 
 # 缩过的机场订阅：地区聚在一起，混着信息占位节点和高倍率节点
 NODES = [
@@ -20,6 +20,24 @@ NODES = [
 	'🇰🇷|韩国家宽-01',
 	'🇦🇷|阿根廷-IEPL',
 	'🇺🇦|乌克兰-IEPL 01',
+]
+
+# 多条订阅合并后的节点池：sub1 用英文缩写标地区，sub2 用中文，sub3/sub4 不是优先订阅
+MIXED_NODES = [
+	'[sub1] 🇭🇰HK 01',
+	'[sub1] 🇭🇰HK 02',
+	'[sub1] 🇯🇵JP 01',
+	'[sub1] 🇹🇼TW 01',
+	'[sub1] 🇸🇬SG 01',
+	'[sub1] 🇰🇷KR 01',
+	'[sub2] 🇭🇰 香港01',
+	'[sub2] 🇯🇵 日本01',
+	'[sub2] 🇸🇬 新加坡01',
+	'[sub2] 🇹🇼 台湾01',
+	'[sub2] 🇰🇷 韩国01',
+	'[sub3] 🇭🇰 香港 01',
+	'[sub4] 🇭🇰|香港-中转 01',
+	'[sub4] 🇯🇵|日本原生-IEPL 01',
 ]
 
 
@@ -40,6 +58,60 @@ def test_subscription_metadata_nodes_are_excluded():
 
 	for node in metadata_nodes:
 		assert any(keyword in node for keyword in checkin.PROXY_SKIP_KEYWORDS)
+
+
+def test_home_broadband_and_starlink_nodes_are_excluded():
+	# 家宽/星链是住宅宽带线路，实测浏览器登录经常超时，整条都不参与轮换
+	residential_nodes = [
+		'[sub4] 🇯🇵|日本星链家宽-IEPL 01',
+		'[sub4] 🇭🇰|香港家宽-中转 01',
+		'[sub4] 🇺🇸|美国-家宽 01 5倍消耗',
+	]
+
+	for node in residential_nodes:
+		assert any(keyword in node for keyword in checkin.PROXY_SKIP_KEYWORDS)
+
+
+def test_english_region_codes_map_to_the_same_region_as_chinese_names():
+	# bigme 这类订阅用英文缩写标地区，不映射的话它的节点永远进不了主节点池
+	assert node_region('[sub1] 🇭🇰HK 01') == '香港'
+	assert node_region('[sub1] 🇸🇬SG 04 2x流量') == '新加坡'
+	assert node_region('[sub1] 🇭🇰 [Hy2]HK 01') == '香港'
+	assert node_region('[sub1] 🇯🇵JP 03') == node_region('[sub2] 🇯🇵 日本01')
+
+
+def test_subscription_index_is_parsed_from_the_prefix():
+	assert node_sub('[sub2] 🇭🇰 香港01') == '2'
+	assert node_sub('🇭🇰|香港-中转 01') == ''
+
+
+def test_home_nodes_come_only_from_preferred_subscriptions():
+	names = [f'acct-{i}' for i in range(9)]
+	bind(*names)
+
+	picked = [candidate_nodes_for(n, MIXED_NODES)[0] for n in names]
+
+	# 主节点全部来自前两条订阅，且互不共用
+	assert {node_sub(n) for n in picked} <= set(checkin.PROXY_PREFERRED_SUBS)
+	assert len(set(picked)) == len(names)
+
+
+def test_other_subscriptions_are_only_the_last_resort():
+	bind('only-one')
+
+	candidates = candidate_nodes_for('only-one', MIXED_NODES)
+	spare = [n for n in candidates if node_sub(n) not in checkin.PROXY_PREFERRED_SUBS]
+
+	# 非优先订阅的节点还在列表里（全挂时还得靠它们），但一律垫底
+	assert spare == ['[sub3] 🇭🇰 香港 01', '[sub4] 🇭🇰|香港-中转 01', '[sub4] 🇯🇵|日本原生-IEPL 01']
+	assert candidates[-len(spare) :] == spare
+
+
+def test_nodes_without_a_subscription_prefix_are_treated_equally():
+	bind('only-one')
+
+	# 单订阅/本地代理没有 [subN] 前缀，不能因为「没有优先节点」就选不出来
+	assert candidate_nodes_for('only-one', NODES)[0] in NODES
 
 
 def test_each_account_gets_its_own_exit_node():

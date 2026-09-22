@@ -86,36 +86,58 @@ PROXY_SKIP_KEYWORDS = (
 	'支持AI',
 	'客服',
 	'邮箱',
+	# 家宽/星链走的是住宅宽带线路，实测浏览器登录经常 Page.goto 超时
+	'家宽',
+	'星链',
 )
 # 每个账号锁定一个地区，只从这几个里挑：延迟低，浏览器登录不容易超时
 #（实测欧美/南美节点会 Page.goto timeout，冷门地区只留作全都不通时的兜底）
 PROXY_PREFERRED_REGIONS = ('香港', '台湾', '新加坡', '日本', '韩国')
+# 有的订阅用英文缩写标地区（'🇭🇰HK 01'），映射成中文才能和别家订阅归到同一个地区
+PROXY_REGION_ALIASES = {'HK': '香港', 'TW': '台湾', 'SG': '新加坡', 'JP': '日本', 'KR': '韩国'}
+# 主节点只从这几条订阅里挑（编号即 [subN] 前缀，按订阅 Secret 的顺序）：前两条是线路稳的
+# 主力机场，其余订阅的节点只留作全都不通时的兜底。设成空则所有订阅一视同仁
+PROXY_PREFERRED_SUBS = tuple(
+	s.strip() for s in os.getenv('CHECKIN_PROXY_PREFERRED_SUBS', '1,2').split(',') if s.strip()
+)
 # 全部账号名，main() 启动时填。用来给每个号分一个互不重复的出口地区
 _account_roster: list[str] = []
 # 某账号本次运行已经挪过几个节点。同一个号频繁换 IP 本身就可疑，只在探测不通时才往后挪
 _proxy_attempt: dict[str, int] = {}
 
 
+def node_sub(node: str) -> str:
+	"""从节点名里取订阅编号，'[sub2] 🇭🇰 香港01' -> '2'；没有前缀返回 ''"""
+	match = re.match(r'^\[sub(\d+)\]', node)
+	return match.group(1) if match else ''
+
+
 def node_region(node: str) -> str:
-	"""从节点名里取地区，'🇭🇰|香港-中转 01' -> '香港'"""
+	"""从节点名里取地区，'🇭🇰|香港-中转 01' -> '香港'，'🇭🇰HK 01' -> '香港'"""
 	cleaned = re.sub(r'^\[sub\d+\]\s*', '', node)
 	if '|' not in cleaned:
 		for preferred in PROXY_PREFERRED_REGIONS:
 			if preferred in cleaned:
 				return preferred
+		for code, region in PROXY_REGION_ALIASES.items():
+			if re.search(rf'\b{code}\b', cleaned):
+				return region
 	tail = cleaned.split('|')[-1].strip()
 	return re.split(r'[-\s]', tail, maxsplit=1)[0] or node
 
 
 def candidate_nodes_for(account_name: str, nodes: list[str]) -> list[str]:
-	"""给这个账号排出候选节点：自己那个地区排前面，其他地区兜底
+	"""给这个账号排出候选节点：自己那个地区排前面，其他地区兜底，非优先订阅垫底
 
 	同一个账号频繁更换出口 IP，本身就是平台判定「这个号不对劲」的特征。所以按账号名
 	做确定性哈希绑定到一个地区——每天都落在同一个地区、同一个节点，只有探测不通时才在
 	同地区内顺延，整个地区都不通才跨地区。不同账号则尽量散在不同地区，免得被一起关联。
 	"""
+	# 主节点只从优先订阅里挑，其余订阅的节点排到最后兜底。没有任何节点带优先前缀时一视同仁
+	preferred = [n for n in nodes if node_sub(n) in PROXY_PREFERRED_SUBS]
+	spare = [n for n in nodes if n not in preferred] if preferred else []
 	groups: dict[str, list[str]] = {}
-	for node in nodes:
+	for node in preferred or nodes:
 		groups.setdefault(node_region(node), []).append(node)
 
 	# 低延迟地区优先，同优先级按名字排，保证每次运行分配完全一致
@@ -148,7 +170,7 @@ def candidate_nodes_for(account_name: str, nodes: list[str]) -> list[str]:
 	home = node_region(home_node)
 	same_region = [n for n in groups[home] if n != home_node]
 	others = [n for region in ordered if region != home for n in groups[region]]
-	return [home_node] + same_region[:2] + others
+	return [home_node] + same_region[:2] + others + spare
 
 
 def rotate_proxy_node(account_name: str, probe_url: str = 'https://www.gstatic.com/generate_204') -> None:
