@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -248,3 +249,12 @@ def test_rotation_probes_the_provider_and_skips_a_node_that_cannot_reach_it(monk
 
 	assert selected['node'] == candidates[1]
 	assert probed_urls == ['https://anyrouter.top', 'https://anyrouter.top']
+
+
+def test_auto_fallback_group_excludes_the_same_nodes_as_rotation():
+	# 候选节点全不通时会退回 mihomo 的 AUTO 组测速选点，它不排除这些节点的话，兜底时就可能落到家宽/星链上
+	script = (project_root / 'scripts' / 'setup_mihomo_proxy.sh').read_text(encoding='utf-8')
+	match = re.search(r"^AUTO_EXCLUDE_FILTER='([^']*)'$", script, re.M)
+
+	assert match and set(match.group(1).split('|')) == set(checkin.PROXY_SKIP_KEYWORDS)
+	assert "exclude-filter: '${AUTO_EXCLUDE_FILTER}'" in script

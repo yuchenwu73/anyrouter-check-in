@@ -74,7 +74,8 @@ SESSION_COOKIE_WARN_DAYS = int(os.getenv('CHECKIN_COOKIE_WARN_DAYS', '5'))
 # mihomo Clash API 地址（setup_mihomo_proxy.sh 写入），设置后每个走代理的账号轮换出口节点
 PROXY_CONTROLLER = os.getenv('CHECKIN_PROXY_CONTROLLER', '').strip()
 # 机场订阅里混着流量/到期/客服等说明项，多半连不通；高倍率节点还会成倍烧套餐流量。
-# 这些都不参与轮换
+# 这些都不参与轮换。mihomo 的 AUTO 兜底组也排除同一批，改这里要同步改
+# setup_mihomo_proxy.sh 的 AUTO_EXCLUDE_FILTER
 PROXY_SKIP_KEYWORDS = (
 	'剩余流量',
 	'套餐到期',

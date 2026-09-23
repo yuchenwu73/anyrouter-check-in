@@ -38,6 +38,9 @@ PROXY_PORT="${PROXY_PORT:-7890}"
 PROXY_TEST_URL="${PROXY_TEST_URL:-https://www.google.com/generate_204}"
 MIHOMO_VERSION="${MIHOMO_VERSION:-v1.19.27}"
 PROXY_REQUIRED="${PROXY_REQUIRED:-false}"
+# AUTO 是账号候选节点全不通时的兜底，同样要避开信息占位、高倍率和家宽/星链节点。
+# 词表必须和 checkin.py 的 PROXY_SKIP_KEYWORDS 一致（tests/test_proxy_nodes.py 会核对）
+AUTO_EXCLUDE_FILTER='剩余流量|套餐到期|距离下次重置|官网|过期时间|倍消耗|倍率|支持AI|客服|邮箱|家宽|星链'
 
 mkdir -p "${PROXY_DIR}"
 cd "${PROXY_DIR}"
@@ -108,6 +111,7 @@ cat >> config.yaml <<EOF
     interval: 300
     tolerance: 150
     lazy: false
+    exclude-filter: '${AUTO_EXCLUDE_FILTER}'
     use:
 EOF
 for provider_name in "${PROVIDER_NAMES[@]}"; do
