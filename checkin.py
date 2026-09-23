@@ -403,11 +403,12 @@ def parse_cookies(cookies_data):
 def session_cookie_days_left(session: str) -> int | None:
 	"""估算这个 session cookie 还能活几天，认不出格式就返回 None
 
-	NewAPI 用 gorilla/securecookie，格式是 base64("<签发 unix 秒>|<载荷>|<签名>")——
+	NewAPI 用 gorilla/securecookie，格式是 URL-safe base64("<签发 unix 秒>|<载荷>|<签名>")——
 	只签名、不加密，所以签发时间能直接读出来。拿它推剩余寿命，好在 401 之前提醒换值。
 	"""
 	try:
-		raw = base64.b64decode(session + '=' * (-len(session) % 4))
+		# 必须按 URL-safe 解：标准 base64 会丢掉 - 和 _，真实 cookie 大多直接解码失败
+		raw = base64.urlsafe_b64decode(session + '=' * (-len(session) % 4))
 		issued = datetime.fromtimestamp(int(raw.split(b'|', 1)[0]))
 	except Exception:
 		return None

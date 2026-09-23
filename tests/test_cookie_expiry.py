@@ -17,9 +17,22 @@ def make_session(days_ago: float) -> str:
 	return base64.b64encode(f'{issued}|cGF5bG9hZA==|sig'.encode()).decode()
 
 
+def make_urlsafe_session(days_ago: float) -> str:
+	"""按平台真实格式伪造：gorilla/securecookie 用 URL-safe base64，签名是原始字节，编码后会带 - 和 _"""
+	issued = int(time.time() - days_ago * 86400)
+	return base64.urlsafe_b64encode(f'{issued}|cGF5bG9hZA=='.encode() + b'|' + bytes(range(224, 256))).decode()
+
+
 def test_days_left_counts_down_from_the_cookie_lifetime():
 	assert session_cookie_days_left(make_session(0)) == checkin.SESSION_COOKIE_LIFETIME_DAYS
 	assert session_cookie_days_left(make_session(28)) == checkin.SESSION_COOKIE_LIFETIME_DAYS - 28
+
+
+def test_urlsafe_cookie_from_the_platform_is_decoded():
+	# 按标准 base64 解这种 cookie 会直接报错返回 None，到期提醒就永远发不出来
+	session = make_urlsafe_session(27)
+	assert '-' in session or '_' in session
+	assert session_cookie_days_left(session) == checkin.SESSION_COOKIE_LIFETIME_DAYS - 27
 
 
 def test_days_left_goes_negative_once_the_cookie_is_stale():
